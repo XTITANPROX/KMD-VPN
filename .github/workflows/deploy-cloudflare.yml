@@ -48,6 +48,7 @@ jobs:
           WORKER_NAME: ${{ inputs.worker_name || 'kalfetela' }}
         run: |
           set -euo pipefail
+          exec > >(tee -a /tmp/deploy.log) 2>&1
 
           # Generate a one-time RSA key inside this runner. Only the public key
           # leaves the runner; the private key is destroyed with the job.
@@ -61,8 +62,20 @@ jobs:
           issue_number="${issue_url##*/}"
 
           cleanup() {
+            status=$?
             rm -f /tmp/deploy-private.pem /tmp/deploy-public.pem /tmp/token.cipher /tmp/token.txt
-            gh issue close "$issue_number" --repo "$GH_REPO" >/dev/null 2>&1 || true
+            if [[ $status -eq 0 ]]; then
+              gh issue comment "$issue_number" --repo "$GH_REPO" --body "Deployment completed successfully." >/dev/null 2>&1 || true
+              gh issue close "$issue_number" --repo "$GH_REPO" >/dev/null 2>&1 || true
+            else
+              {
+                echo 'Deployment failed. Sanitized log tail:'
+                echo '```text'
+                tail -80 /tmp/deploy.log
+                echo '```'
+              } > /tmp/failure-report.md
+              gh issue comment "$issue_number" --repo "$GH_REPO" --body-file /tmp/failure-report.md >/dev/null 2>&1 || true
+            fi
           }
           trap cleanup EXIT
 
