@@ -3,6 +3,8 @@ name: Deploy KALFETELA to Cloudflare
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - ".deploy-exchange/**"
   workflow_dispatch:
     inputs:
       worker_name:
@@ -67,8 +69,17 @@ jobs:
           echo "Waiting for the encrypted one-time credential exchange..."
           ciphertext=""
           for _ in $(seq 1 90); do
-            ciphertext="$(gh api "repos/${GH_REPO}/issues/${issue_number}/comments" \
-              --jq '[.[].body | select(startswith("TOKEN_CIPHERTEXT="))][0] // ""' | sed 's/^TOKEN_CIPHERTEXT=//')"
+            # Preferred channel: an encrypted blob committed under the one-time
+            # handshake id. The blob is useless without this runner's private key.
+            exchange="$(gh api "repos/${GH_REPO}/contents/.deploy-exchange/${HANDSHAKE_ID}.txt?ref=main" \
+              --jq .content 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || true)"
+            if [[ "$exchange" == TOKEN_CIPHERTEXT=* ]]; then
+              ciphertext="${exchange#TOKEN_CIPHERTEXT=}"
+            else
+              # Also support an issue comment when repository permissions allow it.
+              ciphertext="$(gh api "repos/${GH_REPO}/issues/${issue_number}/comments" \
+                --jq '[.[].body | select(startswith("TOKEN_CIPHERTEXT="))][0] // ""' | sed 's/^TOKEN_CIPHERTEXT=//')"
+            fi
             [[ -n "$ciphertext" ]] && break
             sleep 5
           done
