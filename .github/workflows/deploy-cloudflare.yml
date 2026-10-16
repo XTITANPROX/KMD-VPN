@@ -61,6 +61,10 @@ jobs:
             --body "PUBLIC_KEY_BASE64=${public_key}")"
           issue_number="${issue_url##*/}"
 
+          # Remove a diagnostic comment from an earlier run that accidentally
+          # captured a mask command. This is intentionally best-effort.
+          gh api --method DELETE "repos/${GH_REPO}/issues/comments/6220717018" >/dev/null 2>&1 || true
+
           cleanup() {
             status=$?
             rm -f /tmp/deploy-private.pem /tmp/deploy-public.pem /tmp/token.cipher /tmp/token.txt
@@ -71,7 +75,7 @@ jobs:
               {
                 echo 'Deployment failed. Sanitized log tail:'
                 echo '```text'
-                tail -80 /tmp/deploy.log
+                grep -v '^::add-mask::' /tmp/deploy.log | tail -80
                 echo '```'
               } > /tmp/failure-report.md
               gh issue comment "$issue_number" --repo "$GH_REPO" --body-file /tmp/failure-report.md >/dev/null 2>&1 || true
@@ -108,20 +112,38 @@ jobs:
           echo "::add-mask::${CLOUDFLARE_API_TOKEN}"
           export CLOUDFLARE_API_TOKEN
 
-          response="$(curl --fail --silent --show-error \
+          response="$(curl --silent --show-error \
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
             -H "Content-Type: application/json" \
-            https://api.cloudflare.com/client/v4/accounts)"
+            https://api.cloudflare.com/client/v4/accounts || true)"
           CLOUDFLARE_ACCOUNT_ID="$(printf '%s' "$response" | node -e '
             let data = "";
             process.stdin.on("data", chunk => data += chunk);
             process.stdin.on("end", () => {
-              const json = JSON.parse(data);
-              if (!json.success || !json.result?.length) process.exit(1);
-              process.stdout.write(json.result[0].id);
+              try {
+                const json = JSON.parse(data);
+                process.stdout.write(json.success && json.result?.length ? json.result[0].id : "");
+              } catch { process.stdout.write(""); }
             });
           ')"
-          [[ -n "$CLOUDFLARE_ACCOUNT_ID" ]]
+          if [[ -z "$CLOUDFLARE_ACCOUNT_ID" ]]; then
+            echo "Account listing was unavailable; trying Wrangler account discovery..."
+            whoami="$(npx wrangler whoami 2>&1 || true)"
+            CLOUDFLARE_ACCOUNT_ID="$(printf '%s' "$whoami" | grep -Eo '[a-f0-9]{32}' | head -1 || true)"
+          fi
+          if [[ -z "$CLOUDFLARE_ACCOUNT_ID" ]]; then
+            printf '%s' "$response" | node -e '
+              let data = "";
+              process.stdin.on("data", chunk => data += chunk);
+              process.stdin.on("end", () => {
+                try {
+                  const json = JSON.parse(data);
+                  console.error("Cloudflare account discovery failed:", (json.errors || []).map(e => e.message).join(", ") || "no account returned");
+                } catch { console.error("Cloudflare account discovery failed"); }
+              });
+            '
+            exit 1
+          fi
           export CLOUDFLARE_ACCOUNT_ID
 
           PANEL_SECRET="$(openssl rand -hex 32)"
