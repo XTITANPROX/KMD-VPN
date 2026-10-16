@@ -1,5 +1,5 @@
 /* Minimal service worker: keeps the panel installable and caches the shell. */
-const SHELL = ["/panel", "/app.js", "/style.css", "/icon.svg"];
+const SHELL = ["/KalFetela", "/app.js", "/style.css", "/icon.svg"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open("kalfetela-v2").then((cache) => cache.addAll(SHELL).catch(() => undefined)).then(() => self.skipWaiting()));

@@ -5,7 +5,7 @@ import { audit, getDb } from "../db/index.js";
 import { hashPassword } from "../lib/crypto.js";
 import { nowSeconds } from "../lib/format.js";
 import { validate } from "../lib/validate.js";
-import { clientIp, ok, readJson, requireAdmin, requireOwner, safe, type AppVariables } from "../middleware.js";
+import { clientIp, ok, readJson, requireAdmin, requireApiAuth, requireOwner, safe, type AppVariables } from "../middleware.js";
 import { setSessionCookie } from "./auth.js";
 import {
   createAdmin,
@@ -21,7 +21,7 @@ import { createPayment, updatePayment } from "../services/store.js";
 
 export const adminRoutes = new Hono<{ Variables: AppVariables }>();
 
-adminRoutes.use("*", requireAdmin);
+adminRoutes.use("*", requireApiAuth);
 
 adminRoutes.get(
   "/",

@@ -7,6 +7,7 @@
 import { getDb, utcDay } from "../db/index.js";
 import { nowSeconds } from "../lib/format.js";
 import { hashPassword, randomToken, randomUuid, verifyPassword } from "../lib/crypto.js";
+import { serializeTags, tagFilter } from "../lib/tags.js";
 import type {
   AdminRow,
   ApiTokenRow,
@@ -81,10 +82,14 @@ export async function refreshUserStatus(userId: number): Promise<{ user: UserRow
  * Adapters / users
  * ------------------------------------------------------------------ */
 
+/** Reason stamped on accounts held because their reseller ran out of quota. */
+export const QUOTA_HOLD_REASON = "اتمام سقف حجم نماینده";
+
 export interface UserListFilter {
   page?: number;
   perPage?: number;
   search?: string;
+  tag?: string | null;
   status?: string;
   adminId?: number | null;
   planId?: number | null;
@@ -126,6 +131,11 @@ export async function listUsers(filter: UserListFilter = {}): Promise<{ items: U
   if (filter.telegramId) {
     where.push("telegram_id = ?");
     params.push(filter.telegramId);
+  }
+  if (filter.tag) {
+    const { clause, params: tagParams } = tagFilter("tags", filter.tag);
+    where.push(clause);
+    params.push(...tagParams);
   }
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const orderSql =
@@ -191,6 +201,7 @@ export interface CreateUserInput {
   activated?: boolean;
   provider?: string;
   panelId?: number | null;
+  tags?: unknown;
   resetStrategy?: string;
 }
 
@@ -210,8 +221,8 @@ export async function createUser(input: CreateUserInput): Promise<UserRow> {
     `INSERT INTO users (username, uuid, password, email, telegram_id, provider, panel_id, admin_id, plan_id,
       data_limit_bytes, data_used_bytes, upload_bytes, download_bytes, request_limit, request_used, expires_at,
       created_at, activated_at, sub_token, sub_updated_at, device_limit, speed_limit_mbps, status, note,
-      reset_strategy, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      reset_strategy, updated_at, tags)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       input.username,
       uuid,
@@ -234,6 +245,7 @@ export async function createUser(input: CreateUserInput): Promise<UserRow> {
       input.note ?? null,
       input.resetStrategy ?? "no_reset",
       now,
+      serializeTags(input.tags),
     ]
   );
 
@@ -348,6 +360,11 @@ export async function setUserNodes(userId: number, nodeIds: number[]): Promise<v
   }
 }
 
+/** Raw `user_nodes` rows of one node (batched — no per-user queries). */
+export async function listNodeUsers(nodeId: number): Promise<UserNodeRow[]> {
+  return getDb().all<UserNodeRow>("SELECT * FROM user_nodes WHERE node_id = ? ORDER BY id ASC", [nodeId]);
+}
+
 export async function getUserNodes(userId: number): Promise<Array<UserNodeRow & { node?: NodeRow }>> {
   const rows = await getDb().all<UserNodeRow>("SELECT * FROM user_nodes WHERE user_id = ?", [userId]);
   if (!rows.length) return [];
@@ -392,15 +409,33 @@ export async function recomputeAdminUsage(adminId: number): Promise<number> {
  * traffic quota is exhausted, puts that admin's users on hold so their
  * services stop until the reseller tops the quota up.
  */
+/** Auto-releases quota holds (only the ones this module created). */
+export async function releaseAdminHolds(adminId: number): Promise<number> {
+  const db = getDb();
+  const rows = await db.all<UserRow>("SELECT * FROM users WHERE admin_id = ? AND status = 'on_hold' AND hold_reason = ?", [
+    adminId,
+    QUOTA_HOLD_REASON,
+  ]);
+  for (const row of rows) {
+    const status = effectiveStatus({ ...row, status: "active" });
+    await updateUser(row.id, { status: status === "active" ? "active" : status, on_hold: 0, hold_reason: null });
+  }
+  return rows.length;
+}
+
 export async function enforceAdminQuotas(): Promise<Array<{ admin: AdminRow; used: number; held: number }>> {
   const db = getDb();
   const admins = await db.all<AdminRow>("SELECT * FROM admins WHERE role <> 'owner' AND quota_bytes > 0 AND status <> 'disabled'");
   const out: Array<{ admin: AdminRow; used: number; held: number }> = [];
   for (const admin of admins) {
     const used = await recomputeAdminUsage(admin.id);
-    if (used < admin.quota_bytes) continue;
+    if (used < admin.quota_bytes) {
+      // quota raised again → release the accounts we held automatically
+      await releaseAdminHolds(admin.id);
+      continue;
+    }
     const result = await db.run("UPDATE users SET status = 'on_hold', hold_reason = ?, updated_at = ? WHERE admin_id = ? AND status NOT IN ('disabled','on_hold')", [
-      "اتمام سقف حجم نماینده",
+      QUOTA_HOLD_REASON,
       nowSeconds(),
       admin.id,
     ]);
@@ -539,8 +574,8 @@ export async function getPanel(id: number): Promise<PanelRow | undefined> {
 
 export async function createPanel(input: Partial<PanelRow> & { name: string; base_url: string }): Promise<PanelRow> {
   const id = await getDb().insert(
-    `INSERT INTO panels (name, type, base_url, username, password, api_token, sub_base_url, proxy_url, extra, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO panels (name, type, base_url, username, password, api_token, sub_base_url, proxy_url, extra, status, created_at, tags, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       input.name,
       input.type ?? "x-ui",
@@ -553,13 +588,15 @@ export async function createPanel(input: Partial<PanelRow> & { name: string; bas
       input.extra ?? null,
       "unknown",
       nowSeconds(),
+      serializeTags(input.tags),
+      input.notes ?? null,
     ]
   );
   return (await getPanel(id))!;
 }
 
 export async function updatePanel(id: number, patch: Record<string, unknown>): Promise<void> {
-  const allowed = ["name", "type", "base_url", "username", "password", "api_token", "sub_base_url", "proxy_url", "extra", "status", "last_error", "last_checked_at"];
+  const allowed = ["name", "type", "base_url", "username", "password", "api_token", "sub_base_url", "proxy_url", "extra", "status", "last_error", "last_checked_at", "tags", "notes"];
   const keys = Object.keys(patch).filter((key) => allowed.includes(key));
   if (!keys.length) return;
   const sets = keys.map((key) => `${key} = ?`).join(", ");
@@ -600,8 +637,8 @@ export async function createNode(input: Partial<NodeRow> & { name: string; host:
   const id = await getDb().insert(
     `INSERT INTO nodes (name, kind, panel_id, inbound_id, protocol, transport, security, host, port, sni, path, service_name,
       flow, fingerprint, alpn, reality_public_key, reality_private_key, reality_short_id, reality_dest, private_key, public_key,
-      dns, mtu, address_v4, address_v6, settings, capacity, status, sort, active, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      dns, mtu, address_v4, address_v6, settings, capacity, status, sort, active, created_at, updated_at, tags)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       input.name,
       input.kind ?? "panel",
@@ -635,6 +672,7 @@ export async function createNode(input: Partial<NodeRow> & { name: string; host:
       input.active ?? 1,
       now,
       now,
+      serializeTags(input.tags),
     ]
   );
   return (await getNode(id))!;
@@ -646,7 +684,7 @@ export async function updateNode(id: number, patch: Record<string, unknown>): Pr
     "service_name", "flow", "fingerprint", "alpn", "reality_public_key", "reality_private_key", "reality_short_id",
     "reality_dest", "private_key", "public_key", "dns", "mtu", "address_v4", "address_v6", "settings", "capacity",
     "status", "cpu_load", "mem_load", "uptime_seconds", "last_heartbeat_at", "last_error", "sort", "active",
-    "agent_secret", "xray_json", "core_version", "health",
+    "agent_secret", "xray_json", "core_version", "health", "tags",
   ];
   const keys = Object.keys(patch).filter((key) => allowed.includes(key));
   if (!keys.length) return;

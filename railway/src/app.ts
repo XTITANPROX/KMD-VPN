@@ -12,6 +12,7 @@ import { authRoutes } from "./routes/auth.js";
 import { userRoutes } from "./routes/users.js";
 import { nodeRoutes } from "./routes/nodes.js";
 import { panelRoutes } from "./routes/panels.js";
+import type { Context } from "hono";
 import { planRoutes } from "./routes/plans.js";
 import { adminRoutes } from "./routes/admins.js";
 import { paymentRoutes } from "./routes/payments.js";
@@ -71,13 +72,20 @@ export function createApp(options: { withLogger?: boolean } = {}): Hono {
   app.get("/healthz", (c) => c.json({ ok: true, name: APP_NAME, version: APP_VERSION }));
   app.get("/api/healthz", (c) => c.json({ ok: true }));
 
-  app.get("/panel", async (c) => {
+  /**
+   * Admin panel HTML. Reachable at `/KalFetela` (primary), `/panel` and at the
+   * custom `panel_path` setting, so the URL can be hidden like the reference
+   * panels do (`/sp-admin-xxxx`).
+   */
+  const panelHandler = async (c: Context) => {
     const file = serveFile(path.join(publicDir, "panel.html"), "no-cache");
     if (!file) return c.text("panel.html missing", 500);
-    const panelPath = await getSetting("panel_path", "/panel");
+    const panelPath = await getSetting("panel_path", "/KalFetela");
     const html = await file.text();
     return c.html(html.replaceAll("%PANEL_PATH%", panelPath));
-  });
+  };
+  for (const route of ["/KalFetela", "/KalFetela/", "/panel", "/panel/"]) app.get(route, panelHandler);
+  app.get("/kalfetela", panelHandler);
 
   app.get("/", async () => serveFile(path.join(publicDir, "landing.html"), "no-cache") ?? new Response("not found", { status: 404 }));
 

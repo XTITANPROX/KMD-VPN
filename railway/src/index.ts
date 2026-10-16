@@ -23,19 +23,32 @@ export const app = createApp({ withLogger: true });
 
 let server: ReturnType<typeof serve> | null = null;
 
+/**
+ * Creates the first owner account. `ADMIN_USERNAME`/`ADMIN_PASSWORD` win;
+ * without them the panel starts with a ready-made `admin` / `admin` login so a
+ * fresh Railway deployment is usable immediately (change it in «پروفایل»).
+ * Set `DISABLE_DEFAULT_ADMIN=true` to keep the empty install screen instead.
+ */
 async function bootstrapOwner(): Promise<void> {
-  if (!BOOTSTRAP_USERNAME || !BOOTSTRAP_PASSWORD) return;
+  if (process.env.DISABLE_DEFAULT_ADMIN === "true") return;
   const { countAdmins, createAdmin, getAdminByUsername } = await import("./services/store.js");
   if ((await countAdmins()) > 0) return;
-  if (await getAdminByUsername(BOOTSTRAP_USERNAME)) return;
+  const username = BOOTSTRAP_USERNAME || "admin";
+  const password = BOOTSTRAP_PASSWORD || "admin";
+  if (await getAdminByUsername(username)) return;
   await createAdmin({
-    username: BOOTSTRAP_USERNAME,
-    password: BOOTSTRAP_PASSWORD,
+    username,
+    password,
     role: "owner",
     canManageAdmins: true,
     canManageNodes: true,
   });
-  console.log(`[bootstrap] owner account "${BOOTSTRAP_USERNAME}" created from environment`);
+  const { setSetting } = await import("./db/index.js");
+  await setSetting("default_credentials", BOOTSTRAP_USERNAME && BOOTSTRAP_PASSWORD ? "false" : "true");
+  console.log(
+    `[bootstrap] owner account "${username}" created` +
+      (BOOTSTRAP_USERNAME && BOOTSTRAP_PASSWORD ? " from environment" : ` with the default password (change it!)`)
+  );
 }
 
 export async function bootstrap(): Promise<void> {

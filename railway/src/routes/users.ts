@@ -5,8 +5,10 @@ import { audit, getDb, getSetting } from "../db/index.js";
 import { nowSeconds } from "../lib/format.js";
 import { randomUuid, randomToken } from "../lib/crypto.js";
 import { gbToBytes, validate } from "../lib/validate.js";
+import { parseTags, serializeTags } from "../lib/tags.js";
 import {
   applyUsage,
+  countUsers,
   createUser,
   dashboardStats,
   deleteUser,
@@ -17,6 +19,7 @@ import {
   getUserNodes,
   listUsers,
   recomputeAdminUsage,
+  QUOTA_HOLD_REASON,
   refreshUserStatus,
   resetUserTraffic,
   setUserNodes,
@@ -31,7 +34,7 @@ import {
   wireguardKeysForUser,
   wireguardPeerFor,
 } from "../services/wireguard.js";
-import { clientIp, observeBase, ok, readJson, requireAdmin, requestBase, safe, type AppVariables } from "../middleware.js";
+import { clientIp, observeBase, ok, readJson, requireAdmin, requireApiAuth, requestBase, safe, type AppVariables } from "../middleware.js";
 import type { NodeRow, UserRow } from "../types.js";
 
 export const userRoutes = new Hono<{ Variables: AppVariables }>();
@@ -40,7 +43,7 @@ userRoutes.use("*", async (c, next) => {
   await observeBase(c);
   await next();
 });
-userRoutes.use("*", requireAdmin);
+userRoutes.use("*", requireApiAuth);
 
 /* --------------------------------- list -------------------------------- */
 
@@ -58,13 +61,20 @@ userRoutes.get(
       adminId: query.admin_id ? Number(query.admin_id) : scopedAdminId,
       planId: query.plan_id ? Number(query.plan_id) : undefined,
       sort: (query.sort as "newest" | "oldest" | "usage" | "expiry" | "name") ?? "newest",
+      tag: query.tag ?? null,
     });
     const online = await getDb().get<{ count: number | string }>(
       "SELECT COUNT(*) AS count FROM users WHERE last_online_at >= ?",
       [nowSeconds() - 300]
     );
     return ok(c, {
-      users: result.items.map((user) => serializeUser(user)),
+      users: result.items.map((user) => {
+        const serialized = serializeUser(user);
+        if (query.with_tokens === "1") {
+          serialized.sub_token = user.sub_token;
+        }
+        return serialized;
+      }),
       total: result.total,
       page: result.page,
       per_page: result.perPage,
@@ -152,6 +162,126 @@ userRoutes.post(
   })
 );
 
+/* ------------------------- bulk provisioning --------------------------- */
+
+/**
+ * Creates many accounts in one request (tens or hundreds), optionally spreading
+ * them round-robin over the selected nodes/panels — the fastest way to fill a
+ * fleet of Railway deployments.
+ */
+userRoutes.post(
+  "/bulk-create",
+  safe(async (c) => {
+    const body = await readJson(c);
+    const admin = c.get("admin");
+    const count = Math.min(500, Math.max(1, Number(body.count ?? 10)));
+    const startIndex = Math.max(0, Number(body.start ?? 1));
+    const prefix = String(body.prefix ?? "user").trim().replace(/[^\w.-]/g, "") || "user";
+    const padding = Math.min(6, Math.max(0, Number(body.padding ?? 0)));
+    const randomSuffix = body.random_suffix === true;
+    const dataGb = Number(body.data_gb ?? 0);
+    const days = Number(body.days ?? 30);
+    const deviceLimit = Number(body.device_limit ?? 0);
+    const speedMbps = Number(body.speed_mbps ?? 0);
+    const note = body.note ? String(body.note).slice(0, 255) : null;
+    const tags = serializeTags(body.tags);
+    const plan = body.plan_id ? await getPlan(Number(body.plan_id)) : undefined;
+    const distribution = String(body.distribution ?? "all") === "round_robin" ? "round_robin" : "all";
+
+    let nodeIds = (Array.isArray(body.node_ids) ? body.node_ids : []).map(Number).filter((id) => Number.isFinite(id) && id > 0);
+    if (plan?.node_ids) {
+      try {
+        const parsed = JSON.parse(plan.node_ids) as number[];
+        if (Array.isArray(parsed) && parsed.length) nodeIds = parsed.map(Number);
+      } catch {
+        /* keep the explicit list */
+      }
+    }
+    if (!nodeIds.length) {
+      const nodes = await getDb().all<{ id: number }>("SELECT id FROM nodes WHERE active = 1 ORDER BY sort ASC");
+      nodeIds = nodes.map((node) => node.id);
+    }
+
+    let ownerId = admin.id;
+    if (admin.role === "owner" && body.admin_id) {
+      const target = await getAdmin(Number(body.admin_id));
+      if (!target) return c.json({ error: "نماینده پیدا نشد", code: "not_found" }, 404);
+      ownerId = target.id;
+    }
+    if (admin.role !== "owner" && admin.max_users > 0) {
+      const current = await countUsers(admin.id);
+      if (current + count > admin.max_users) {
+        return c.json({ error: `با این تعداد از سقف کاربران شما (${admin.max_users}) عبور می‌کند`, code: "limit" }, 403);
+      }
+    }
+
+    // pick the first free index so repeated calls never collide
+    const taken = new Set(
+      (await getDb().all<{ username: string }>("SELECT username FROM users WHERE username LIKE ?", [`${prefix}%`])).map((row) => row.username)
+    );
+    const created: Array<Record<string, unknown>> = [];
+    const skipped: string[] = [];
+    let index = startIndex;
+    while (created.length < count) {
+      const number = padding > 0 ? String(index).padStart(padding, "0") : String(index);
+      const suffix = randomSuffix ? `_${randomToken(3).replace(/[^a-zA-Z0-9]/g, "").slice(0, 4)}` : "";
+      const username = `${prefix}${number}${suffix}`;
+      index += 1;
+      if (taken.has(username)) {
+        skipped.push(username);
+        if (skipped.length > count * 3) break;
+        continue;
+      }
+      taken.add(username);
+      const assigned = distribution === "round_robin" && nodeIds.length ? [nodeIds[created.length % nodeIds.length]!] : nodeIds;
+      try {
+        const user = await createUser({
+          username,
+          dataLimitBytes: plan?.data_gb ? gbToBytes(plan.data_gb) : dataGb ? gbToBytes(dataGb) : 0,
+          days: plan?.days || days,
+          deviceLimit: plan?.device_limit ?? deviceLimit,
+          speedLimitMbps: plan?.speed_mbps ?? speedMbps,
+          planId: plan?.id ?? null,
+          adminId: ownerId,
+          nodeIds: assigned,
+          note,
+          tags,
+        });
+        created.push({
+          id: user.id,
+          username: user.username,
+          uuid: user.uuid,
+          sub_token: user.sub_token,
+          node_ids: assigned,
+          expires_at: user.expires_at,
+        });
+      } catch (error) {
+        skipped.push(`${username} (${(error as Error).message})`);
+      }
+    }
+
+    await audit({
+      adminId: admin.id,
+      actor: admin.username,
+      action: "users_bulk_create",
+      meta: { prefix, count: created.length, skipped: skipped.length, node_ids: nodeIds, distribution },
+      ip: clientIp(c),
+    });
+    const origin = requestBase(c);
+    return ok(
+      c,
+      {
+        created,
+        skipped,
+        count: created.length,
+        nodes: nodeIds,
+        subscription_base: `${origin}/sub/`,
+      },
+      201
+    );
+  })
+);
+
 /* -------------------------------- create ------------------------------- */
 
 userRoutes.post(
@@ -171,6 +301,9 @@ userRoutes.post(
       node_ids?: number[];
       ip_limit?: number;
       admin_id?: number;
+      uuid?: string;
+      password?: string;
+      tags?: string[] | string;
     }>(body, (v) => {
       v.username();
       v.number("data_gb", { def: 0, min: 0, max: 100_000, label: "حجم" });
@@ -182,7 +315,10 @@ userRoutes.post(
       v.string("email", { max: 128 });
       v.string("note", { max: 255 });
       v.array("node_ids", { label: "نودها" });
+      v.array("tags", { label: "برچسب‌ها" });
       v.int("admin_id", { min: 0, label: "نماینده" });
+      v.string("uuid", { max: 64 });
+      v.string("password", { max: 64 });
     });
 
     const existing = await getDb().get<{ id: number }>("SELECT id FROM users WHERE username = ?", [input.username]);
@@ -202,8 +338,16 @@ userRoutes.post(
         return c.json({ error: "به سقف تعداد کاربران مجاز خود رسیده‌اید", code: "limit" }, 403);
       }
     }
-    if (admin.role !== "owner" && admin.quota_bytes > 0 && (await recomputeAdminUsage(admin.id)) >= admin.quota_bytes) {
-      return c.json({ error: "سقف حجم نمایندگی شما تکمیل شده است؛ برای ساخت کاربر جدید سقف را شارژ کنید", code: "quota" }, 403);
+    // Quota is checked against the *target* admin, so a reseller cannot fill up
+    // another (already exhausted) reseller either. The owner may override, and
+    // in that case the new account starts on hold until the quota is topped up.
+    const targetAdmin = ownerId === admin.id ? admin : await getAdmin(ownerId);
+    let quotaWarning: string | null = null;
+    if (targetAdmin && targetAdmin.role !== "owner" && targetAdmin.quota_bytes > 0 && (await recomputeAdminUsage(targetAdmin.id)) >= targetAdmin.quota_bytes) {
+      if (admin.role !== "owner") {
+        return c.json({ error: "سقف حجم نمایندگی تکمیل شده است؛ برای ساخت کاربر جدید سقف را شارژ کنید", code: "quota" }, 403);
+      }
+      quotaWarning = `سقف حجم نماینده «${targetAdmin.username}» تکمیل است؛ کاربر ساخته شد ولی تا شارژ سقف روی حالت انتظار می‌ماند.`;
     }
 
     let plan = input.plan_id ? await getPlan(input.plan_id) : undefined;
@@ -223,6 +367,9 @@ userRoutes.post(
 
     const user = await createUser({
       username: input.username,
+      uuid: input.uuid && /^[0-9a-f-]{36}$/i.test(String(input.uuid)) ? String(input.uuid) : undefined,
+      password: input.password ? String(input.password) : undefined,
+      tags: input.tags,
       dataLimitBytes: input.data_gb ? gbToBytes(input.data_gb) : 0,
       days: input.days,
       deviceLimit: input.device_limit,
@@ -244,7 +391,21 @@ userRoutes.post(
       meta: { sync: sync.synced, failed: sync.errors },
       ip: clientIp(c),
     });
-    return ok(c, { user: serializeUser(user), subscription: await subscriptionUrls(user, requestBase(c)), sync }, 201);
+    if (quotaWarning) {
+      await updateUser(user.id, { status: "on_hold", on_hold: 1, hold_reason: QUOTA_HOLD_REASON });
+      await refreshUserStatus(user.id);
+    }
+    const fresh = quotaWarning ? (await getUser(user.id))! : user;
+    return ok(
+      c,
+      {
+        user: serializeUser(fresh),
+        subscription: await subscriptionUrls(fresh, requestBase(c)),
+        sync,
+        warning: quotaWarning,
+      },
+      201
+    );
   })
 );
 
@@ -297,6 +458,8 @@ userRoutes.put(
     if (body.reset_strategy !== undefined) patch.reset_strategy = String(body.reset_strategy);
     if (body.username && String(body.username) !== user.username) patch.username = String(body.username);
     if (body.request_limit !== undefined) patch.request_limit = Number(body.request_limit);
+    if (body.tags !== undefined) patch.tags = serializeTags(body.tags);
+    if (body.status === "active") patch.hold_reason = null;
     await updateUser(id, patch as Partial<UserRow>);
     if (body.reset_usage === true) await resetUserTraffic(id);
     await refreshUserStatus(id);
@@ -566,8 +729,6 @@ userRoutes.get(
 /* ------------------------------- helpers ------------------------------- */
 
 async function countWhere(clause: string): Promise<number> {
-  const admin = { role: "owner" };
-  void admin;
   const row = await getDb().get<{ count: number | string }>(`SELECT COUNT(*) AS count FROM users WHERE ${clause}`);
   return Number(row?.count ?? 0);
 }
@@ -601,6 +762,7 @@ export function serializeUser(user: UserRow, options: { withSecrets?: boolean } 
     reset_strategy: user.reset_strategy,
     on_hold: Boolean(user.on_hold),
     hold_reason: user.hold_reason ?? null,
+    tags: parseTags(user.tags),
   };
 }
 

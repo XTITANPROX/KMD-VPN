@@ -4,7 +4,7 @@ import { Hono } from "hono";
 import { audit, getDb, getSettings, setSettings } from "../db/index.js";
 import { DEFAULT_SETTINGS } from "../db/schema.js";
 import { nowSeconds } from "../lib/format.js";
-import { clientIp, ok, readJson, requireAdmin, requireOwner, safe, type AppVariables } from "../middleware.js";
+import { clientIp, ok, readJson, requireAdmin, requireApiAuth, requireOwner, safe, type AppVariables } from "../middleware.js";
 import { createApiToken, deleteApiToken, listApiTokens } from "../services/store.js";
 import { createBackup, dumpDatabase, listBackups, pruneBackups, readBackup, restoreBackup } from "../services/backup.js";
 import { bot } from "../services/bot.js";
@@ -13,7 +13,7 @@ import { embeddedXray } from "../services/clients/local.js";
 
 export const settingsRoutes = new Hono<{ Variables: AppVariables }>();
 
-settingsRoutes.use("*", requireAdmin);
+settingsRoutes.use("*", requireApiAuth);
 
 const SECRET_KEYS = ["bot_token", "usdt_wallet"];
 

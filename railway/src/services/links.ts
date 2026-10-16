@@ -2,6 +2,8 @@
 // Xray (with Iran routing + Fragment) and WireGuard configs.
 
 import { fmtBytes } from "../lib/format.js";
+import { CLIENT_APPS, SETUP_STEPS } from "../lib/clients.js";
+import { qrDataUri } from "../lib/qr.js";
 import { buildWireguardConf } from "./wireguard.js";
 import type { NodeRow, UserRow } from "../types.js";
 
@@ -530,11 +532,46 @@ export function buildXrayConfig(user: UserRow, nodes: NodeRow[], options: LinkOp
 
 /* ------------------------------- sub page ------------------------------ */
 
-export function subscriptionHtml(
-  user: UserRow,
-  entries: LinkEntry[],
-  options: { panelName: string; supportId: string; subscriptionUrl: string; announce?: string }
-): string {
+export interface SubscriptionPageOptions {
+  panelName: string;
+  supportId: string;
+  subscriptionUrl: string;
+  announce?: string;
+  /** Extra subscription URLs (Clash / sing-box / Xray / raw). */
+  formats?: Array<{ key: string; label: string; url: string }>;
+  /** Traffic price of the plan (informational). */
+  note?: string;
+  /** Subscription URL split per format, used for the one-tap app buttons. */
+  deep?: { raw?: string; clash?: string; singbox?: string; xray?: string };
+}
+
+/**
+ * BPB-style one-tap buttons: every popular client understands its own URL
+ * scheme, so the user does not have to copy/paste anything on a phone.
+ */
+export function deepLinkCard(options: SubscriptionPageOptions): string {
+  const raw = options.deep?.raw ?? options.subscriptionUrl;
+  const clash = options.deep?.clash ?? options.subscriptionUrl;
+  const singbox = options.deep?.singbox ?? options.subscriptionUrl;
+  const buttons: Array<{ label: string; href: string }> = [
+    { label: "افزودن در v2rayNG", href: `v2rayng://install-sub?url=${encodeURIComponent(raw)}` },
+    { label: "افزودن در Hiddify", href: `hiddify://import/${raw}` },
+    { label: "افزودن در sing-box", href: `sing-box://import-remote-profile?url=${encodeURIComponent(singbox)}` },
+    { label: "افزودن در Clash", href: `clash://install-config?url=${encodeURIComponent(clash)}` },
+    { label: "افزودن در Shadowrocket", href: `sub://${raw.replace(/^https?:\/\//, "")}` },
+    { label: "افزودن در Streisand", href: `streisand://import/${raw}` },
+  ];
+  return `<div class="card">
+  <div class="row-head"><b>افزودن با یک ضربه</b><span class="muted">مخصوص موبایل</span></div>
+  <div class="chips-row">
+    ${buttons.map((button) => `<a class="btn" href="${button.href.replace(/"/g, "&quot;")}">${button.label}</a>`).join("")}
+  </div>
+  <div class="muted" style="margin-top:8px">اگر دکمه‌ها کار نکرد، از QR بالا یا لینک ساب استفاده کنید.</div>
+</div>
+`;
+}
+
+export function subscriptionHtml(user: UserRow, entries: LinkEntry[], options: SubscriptionPageOptions): string {
   const escapeAttr = (value: string) => value.replace(/'/g, "\\'").replace(/\n/g, "\\n");
   const rows = entries
     .map((entry) => {
@@ -556,6 +593,9 @@ export function subscriptionHtml(
 <title>${options.panelName} — ${user.username}</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css"/>
 <script>
+ function copySub(btn, text){
+   navigator.clipboard.writeText(text).then(() => { btn.textContent = '✓ کپی شد'; setTimeout(() => (btn.textContent = 'کپی لینک'), 1500); });
+ }
  function downloadConf(btn){
    const text = btn.closest('.row').querySelector('.link').textContent;
    const blob = new Blob([text], { type: 'text/plain' });
@@ -583,6 +623,19 @@ export function subscriptionHtml(
  a.btn{display:inline-block;background:#0ea5e9;color:#04121f;text-decoration:none;border-radius:10px;padding:10px 14px;font-weight:700}
  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
  .k{font-size:12px;color:#93a4c3}.v{font-weight:700;margin-top:2px}
+ .chips-row{display:flex;flex-wrap:wrap;gap:8px}
+ .chips-row .btn{font-size:13px;padding:9px 12px}
+ .input{flex:1;background:#080d18;border:1px solid #22304d;color:#cfe4ff;border-radius:10px;padding:9px;direction:ltr;font-family:ui-monospace,monospace;font-size:12px;min-width:0}
+ .copy-row{display:flex;gap:8px;margin-top:10px}
+ .qr-box{display:flex;justify-content:center;background:#fff;border-radius:16px;padding:12px;margin-top:8px}
+ .qr-box img{width:min(260px,70vw);height:auto;image-rendering:pixelated}
+ .steps{display:grid;gap:8px;margin-top:6px}
+ .step{background:#0e1626;border:1px solid #1e293b;border-radius:12px;padding:10px;display:grid;gap:4px}
+ .step span{color:#93a4c3;font-size:12.5px}
+ .apps{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;margin-top:6px}
+ .app{background:#0e1626;border:1px solid #1e293b;border-radius:12px;padding:10px;display:grid;gap:3px;text-decoration:none;color:#e6edf7}
+ .app:hover{border-color:#2b4a7d}
+ .app .note{font-size:11.5px;color:#8ea3c2}
 </style></head><body>
 <div class="card">
   <div class="title">${options.panelName}</div>
@@ -595,12 +648,43 @@ export function subscriptionHtml(
     <div><div class="k">انقضا</div><div class="v">${user.expires_at ? new Date(user.expires_at * 1000).toLocaleDateString("fa-IR") : "بدون انقضا"}</div></div>
     <div><div class="k">دستگاه مجاز</div><div class="v">${user.device_limit || "نامحدود"}</div></div>
   </div>
-  <div style="margin-top:12px"><a class="btn" href="${options.subscriptionUrl}">لینک ساب (Base64)</a></div>
+  <div style="margin-top:12px" class="chips-row">
+    ${(options.formats ?? [{ key: "base64", label: "لینک ساب (Base64)", url: options.subscriptionUrl }])
+      .map((item) => `<a class="btn" href="${item.url}">${item.label}</a>`)
+      .join("")}
+  </div>
+</div>
+${deepLinkCard(options)}
+<div class="card qr-card">
+  <div class="row-head"><b>اسکن سریع (QR)</b><span class="muted">اسکن کنید تا مستقیم در برنامه اضافه شود</span></div>
+  <div class="qr-box"><img alt="QR" src="${qrDataUri(options.subscriptionUrl, { scale: 5, light: "#ffffff", dark: "#0b1220" })}"/></div>
+  <div class="copy-row"><input class="input" readonly value="${options.subscriptionUrl.replace(/"/g, "&quot;")}"/><button onclick="copySub(this,'${escapeAttr(options.subscriptionUrl)}')">کپی لینک</button></div>
+</div>
+<div class="card">
+  <div class="row-head"><b>راهنمای اتصال</b><span class="muted">۴ قدم ساده</span></div>
+  <div class="steps">
+    ${SETUP_STEPS.map((step) => `<div class="step"><b>${step.title}</b><span>${step.body}</span></div>`).join("")}
+  </div>
+</div>
+<div class="card">
+  <div class="row-head"><b>برنامه‌های پیشنهادی</b><span class="muted">برای همهٔ دستگاه‌ها</span></div>
+  <div class="apps">
+    ${CLIENT_APPS.filter((app) => app.featured)
+      .map(
+        (app) => `<a class="app" href="${app.url}" target="_blank" rel="noreferrer">
+          <b>${app.name}</b>
+          <span class="muted">${app.platforms.join(" · ")}</span>
+          <span class="note">${app.note}</span>
+        </a>`
+      )
+      .join("")}
+  </div>
+  <div class="muted" style="margin-top:8px">همهٔ برنامه‌ها: ${CLIENT_APPS.map((app) => `<a href="${app.url}" target="_blank" rel="noreferrer" style="color:#7dd3fc">${app.name}</a>`).join(" · ")}</div>
 </div>
 <div class="card">
   <div class="row-head"><b>کانفیگ‌ها</b><span class="muted">${entries.length} نود</span></div>
   ${rows || '<div class="muted">هنوز نودی برای این کاربر تنظیم نشده است.</div>'}
 </div>
-<div class="card muted">پشتیبانی: ${options.supportId || "—"}</div>
+<div class="card muted">پشتیبانی: ${options.supportId || "—"}${options.note ? ` · ${options.note}` : ""}</div>
 </body></html>`;
 }

@@ -6,6 +6,7 @@ import { nowSeconds } from "../lib/format.js";
 import { randomHex } from "../lib/crypto.js";
 import { applyUsage, getUser, getUserNodes, listNodes, getNode, listUsers, refreshUserStatus, updateNode, type UserStatusHandler } from "./store.js";
 import { embeddedXray, ensureRealitySettings, type EmbeddedInboundSpec } from "./clients/local.js";
+import { KalFetelaRemoteClient } from "./clients/kalfetela.js";
 import { MarzbanClient } from "./clients/marzban.js";
 import { XuiClient } from "./clients/xui.js";
 import { specFromUser, type ClientSpec, type NodeClient, type NodeClientInfo } from "./clients/types.js";
@@ -107,6 +108,7 @@ export async function clientForNode(node: NodeRow): Promise<NodeClient> {
 
 function panelClient(panel: PanelRow, node: NodeRow): NodeClient {
   const type = (panel.type || "x-ui").toLowerCase();
+  if (type === "kalfetela" || type === "kalfetela-panel") return new KalFetelaRemoteClient(panel, node);
   if (type === "marzban") return new MarzbanClient(panel, node);
   return new XuiClient(panel, node);
 }

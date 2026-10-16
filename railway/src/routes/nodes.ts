@@ -4,9 +4,10 @@ import { Hono } from "hono";
 import { audit, getDb } from "../db/index.js";
 import { XRAY_API_PORT } from "../env.js";
 import { randomHex, realityKeyPair } from "../lib/crypto.js";
+import { parseTags, serializeTags } from "../lib/tags.js";
 import { nowSeconds } from "../lib/format.js";
 import { validate } from "../lib/validate.js";
-import { clientIp, ok, readJson, requireAdmin, requirePermission, safe, type AppVariables } from "../middleware.js";
+import { clientIp, ok, readJson, requireAdmin, requireApiAuth, requirePermission, safe, type AppVariables } from "../middleware.js";
 import {
   createNode,
   deleteNode,
@@ -36,7 +37,7 @@ import type { NodeRow } from "../types.js";
 
 export const nodeRoutes = new Hono<{ Variables: AppVariables }>();
 
-nodeRoutes.use("*", requireAdmin);
+nodeRoutes.use("*", requireApiAuth);
 
 const PROTOCOLS = ["vless", "vmess", "trojan", "shadowsocks", "wireguard"];
 const TRANSPORTS = ["tcp", "ws", "grpc", "httpupgrade", "http", "quic", "xhttp"];
@@ -131,6 +132,7 @@ nodeRoutes.post(
       v.string("inbound_id", { max: 64 });
       v.int("capacity", { def: 0, min: 0 });
       v.int("sort", { def: 0 });
+      v.array("tags", { label: "برچسب‌ها" });
       v.bool("active", true);
     });
 
@@ -170,6 +172,7 @@ nodeRoutes.post(
       sort: Number(input.sort ?? 0),
       active: input.active === false ? 0 : 1,
       status: "unknown",
+      tags: serializeTags(body.tags),
       settings: body.settings ? JSON.stringify(body.settings) : null,
     });
 
@@ -252,6 +255,7 @@ nodeRoutes.put(
       if (body[key] !== undefined) patch[key] = body[key] === "" ? null : body[key];
     }
     if (body.settings !== undefined) patch.settings = body.settings ? JSON.stringify(body.settings) : null;
+    if (body.tags !== undefined) patch.tags = serializeTags(body.tags);
     await updateNode(id, patch);
     const updated = (await getNode(id))!;
     if (updated.kind === "embedded") await embeddedXray.restart();
@@ -468,6 +472,7 @@ function serializeNode(node: NodeRow, userCount: number) {
     has_reality_private: Boolean(node.reality_private_key),
     wireguard_public_key: node.protocol === "wireguard" ? node.public_key : undefined,
     has_wireguard_private: node.protocol === "wireguard" ? Boolean(node.private_key) : undefined,
+    tags: parseTags(node.tags),
   };
 }
 

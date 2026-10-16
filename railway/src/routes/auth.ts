@@ -3,7 +3,7 @@
 import { Hono } from "hono";
 import { COOKIE_NAME, SESSION_TTL_HOURS, BOOTSTRAP_USERNAME, BOOTSTRAP_PASSWORD } from "../env.js";
 import { hashPassword, verifyPassword } from "../lib/crypto.js";
-import { audit, getSetting } from "../db/index.js";
+import { audit, getSetting, setSetting } from "../db/index.js";
 import { countAdmins, createAdmin, getAdminByTelegram, getAdminByUsername, listAdmins, updateAdmin, verifyAdminLogin } from "../services/store.js";
 import {
   clearFailedLogins,
@@ -29,7 +29,9 @@ authRoutes.get(
     return ok(c, {
       installed: total > 0,
       login_captcha: (await getSetting("login_captcha", "false")) === "true",
+      default_credentials: (await getSetting("default_credentials", "false")) === "true",
       panel_name: await getSetting("panel_name", "KalFetela"),
+      panel_path: await getSetting("panel_path", "/KalFetela"),
       brand_tagline: await getSetting("brand_tagline", ""),
     });
   })
@@ -131,8 +133,10 @@ authRoutes.get(
   requireAdmin,
   safe(async (c) => {
     const admin = c.get("admin");
+    const defaultPassword = await defaultPasswordFlag();
     return ok(c, {
-      admin: publicAdmin(admin),
+      admin: { ...publicAdmin(admin), default_password: defaultPassword },
+      panel_path: await getSetting("panel_path", "/KalFetela"),
       permissions: {
         owner: admin.role === "owner",
         nodes: admin.role === "owner" || Boolean(admin.can_manage_nodes),
@@ -165,6 +169,7 @@ authRoutes.post(
     }
     if (next.length < 6) return c.json({ error: "رمز عبور جدید باید حداقل ۶ کاراکتر باشد", code: "validation" }, 400);
     await updateAdmin(admin.id, { password: next });
+    await setSetting("default_credentials", "false");
     await audit({ adminId: admin.id, actor: admin.username, action: "password_change", ip: clientIp(c) });
     return ok(c, { message: "رمز عبور تغییر کرد" });
   })
@@ -204,6 +209,7 @@ function publicAdmin(admin: {
   first_name?: string | null;
   last_name?: string | null;
   last_login_at?: number | null;
+  default_password?: boolean;
 }) {
   return {
     id: admin.id,
@@ -221,7 +227,12 @@ function publicAdmin(admin: {
     first_name: admin.first_name ?? null,
     last_name: admin.last_name ?? null,
     last_login_at: admin.last_login_at ?? null,
+    default_password: admin.default_password === true,
   };
+}
+
+export async function defaultPasswordFlag(): Promise<boolean> {
+  return (await getSetting("default_credentials", "false")) === "true";
 }
 
 export function setSessionCookie(c: { header: (name: string, value: string) => void }, token: string): void {

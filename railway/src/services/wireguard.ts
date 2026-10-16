@@ -8,7 +8,7 @@ import path from "node:path";
 import { x25519KeyPair, x25519PublicFromPrivate } from "../lib/crypto.js";
 import { fmtBytes, nowSeconds } from "../lib/format.js";
 import { DATA_DIR } from "../env.js";
-import { getUserNodes, setUserNodeClientId, updateNode } from "./store.js";
+import { getUserNodes, listNodeUsers, setUserNodeClientId, updateNode } from "./store.js";
 import type { NodeRow, UserRow } from "../types.js";
 
 export const WG_DEFAULT_PORT = 51820;
@@ -156,15 +156,18 @@ export async function wireguardPeersForNode(
   users: UserRow[],
   options: { create?: boolean } = {}
 ): Promise<WireguardPeer[]> {
-  const attached = new Set<number>();
-  for (const user of users) {
-    if ((await getUserNodes(user.id)).some((row) => row.node_id === node.id)) attached.add(user.id);
-  }
+  const rows = await listNodeUsers(node.id);
+  const attached = new Map(rows.map((row) => [row.user_id, row]));
   const out: WireguardPeer[] = [];
   for (const user of users) {
-    if (!attached.has(user.id)) continue;
-    const peer = options.create === false ? await wireguardPeerFor(user, node) : await ensureWireguardClient(user, node);
-    if (peer) out.push(peer);
+    const row = attached.get(user.id);
+    if (!row) continue;
+    if (options.create === false) {
+      const peer = await wireguardPeerFor(user, node);
+      if (peer) out.push({ ...peer, enabled: row.enabled !== 0 });
+      continue;
+    }
+    out.push({ ...(await ensureWireguardClient(user, node)), enabled: row.enabled !== 0 });
   }
   return out;
 }

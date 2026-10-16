@@ -26,6 +26,7 @@ const ADDITIVE_COLUMNS: Record<string, Record<string, string>> = {
     last_seen_at: "INTEGER",
   },
   users: {
+    tags: "TEXT",
     hwid: "TEXT",
     sub_updated_at: "INTEGER",
     on_hold: "INTEGER NOT NULL DEFAULT 0",
@@ -34,6 +35,7 @@ const ADDITIVE_COLUMNS: Record<string, Record<string, string>> = {
     traffic_reset_at: "INTEGER",
   },
   nodes: {
+    tags: "TEXT",
     agent_secret: "TEXT",
     xray_json: "TEXT",
     core_version: "TEXT",
@@ -41,6 +43,10 @@ const ADDITIVE_COLUMNS: Record<string, Record<string, string>> = {
   },
   settings: {
     updated_at: "INTEGER",
+  },
+  panels: {
+    tags: "TEXT",
+    notes: "TEXT",
   },
   payments: {
     discount: "INTEGER NOT NULL DEFAULT 0",

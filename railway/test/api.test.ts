@@ -152,9 +152,25 @@ describe("panel API", () => {
     const token = await call("/api/settings/tokens", { method: "POST", body: { name: "test", scopes: "*" } });
     expect(token.status).toBe(201);
     apiKey = token.json.data.token;
+
+    // the session must NOT be needed: a bare API key has to authenticate on its own
+    const saved = cookie;
+    cookie = "";
     const response = await call("/api/users", { headers: { "x-api-key": apiKey } });
     expect(response.status).toBe(200);
     expect(response.json.data.total).toBeGreaterThan(0);
+    expect((await call("/api/nodes", { headers: { "x-api-key": apiKey } })).status).toBe(200);
+    expect((await call("/api/users", { headers: { "x-api-key": "kf_wrong" } })).status).toBe(401);
+    cookie = saved;
+
+    // read-only tokens can read but not write
+    const readToken = await call("/api/settings/tokens", { method: "POST", body: { name: "readonly", scopes: "read" } });
+    expect(readToken.status).toBe(201);
+    const readKey = readToken.json.data.token;
+    cookie = "";
+    expect((await call("/api/plans", { headers: { "x-api-key": readKey } })).status).toBe(200);
+    expect((await call("/api/plans", { method: "POST", headers: { "x-api-key": readKey }, body: { name: "nope", price: 1 } })).status).toBe(403);
+    cookie = saved;
   });
 
   it("exposes the agent API behind the shared secret", async () => {
@@ -296,6 +312,94 @@ describe("panel API", () => {
     expect(wrong.status).toBe(400);
   });
 
+  it("serves the QR endpoint, the client-app catalogue and the panel path", async () => {
+    const apps = await call("/api/public/apps");
+    expect(apps.status).toBe(200);
+    expect(apps.json.data.apps.length).toBeGreaterThanOrEqual(8);
+    expect(apps.json.data.steps.length).toBeGreaterThanOrEqual(3);
+    expect(apps.json.data.apps.every((app: any) => app.url.startsWith("http"))).toBe(true);
+
+    const qr = await call(`/api/qr?data=${encodeURIComponent("https://example.com/sub/abc")}&scale=4`);
+    expect(qr.status).toBe(200);
+    expect(qr.headers.get("content-type")).toContain("image/svg+xml");
+    expect(qr.text.startsWith("<svg")).toBe(true);
+
+    expect((await call("/api/qr")).status).toBe(400);
+    expect((await call(`/api/qr?data=${"x".repeat(260)}`)).status).toBe(400);
+
+    const panelPath = (await call("/api/auth/status")).json.data.panel_path;
+    expect(panelPath).toBe("/KalFetela");
+    expect((await call("/KalFetela")).status).toBe(200);
+  });
+
+  it("keeps, filters and applies tags on users and nodes", async () => {
+    const node = await call("/api/nodes", {
+      method: "POST",
+      body: { name: "tagged-node", kind: "custom", protocol: "vless", transport: "ws", security: "tls", host: "tag.example.com", port: 443, tags: ["آلمان", "پرسرعت"] },
+    });
+    expect(node.status).toBe(201);
+    expect(node.json.data.node.tags).toEqual(["آلمان", "پرسرعت"]);
+
+    const updated = await call(`/api/users/${userId}`, { method: "PUT", body: { tags: ["vip", "تست"] } });
+    expect(updated.status).toBe(200);
+    expect(updated.json.data.user.tags).toEqual(["vip", "تست"]);
+
+    const filtered = await call("/api/users?tag=vip");
+    expect(filtered.json.data.users.some((user: any) => user.id === userId)).toBe(true);
+    const missing = await call("/api/users?tag=does-not-exist");
+    expect(missing.json.data.users.length).toBe(0);
+  });
+
+  it("provisions a batch of accounts across the nodes", async () => {
+    const batch = await call("/api/users/bulk-create", {
+      method: "POST",
+      body: { prefix: "bulk", count: 5, start: 1, padding: 2, data_gb: 2, days: 30, node_ids: [nodeId], distribution: "round_robin", tags: ["batch"] },
+    });
+    expect(batch.status).toBe(201);
+    expect(batch.json.data.count).toBe(5);
+    expect(batch.json.data.created.map((item: any) => item.username)).toEqual(["bulk01", "bulk02", "bulk03", "bulk04", "bulk05"]);
+    expect(batch.json.data.created.every((item: any) => item.node_ids[0] === nodeId)).toBe(true);
+
+    // a second run must not collide with the first one
+    const again = await call("/api/users/bulk-create", { method: "POST", body: { prefix: "bulk", count: 2, start: 1, padding: 2, node_ids: [nodeId] } });
+    expect(again.json.data.created.map((item: any) => item.username)).toEqual(["bulk06", "bulk07"]);
+
+    const withTokens = await call("/api/users?search=bulk&with_tokens=1&per_page=50");
+    expect(withTokens.json.data.users.every((user: any) => (user.sub_token ?? "").length === 24)).toBe(true);
+    const withoutTokens = await call("/api/users?search=bulk&per_page=50");
+    expect(withoutTokens.json.data.users.every((user: any) => user.sub_token === undefined)).toBe(true);
+  });
+
+  it("manages a fleet of remote KalFetela panels", async () => {
+    const rejected = await call("/api/panels", {
+      method: "POST",
+      body: { name: "remote-1", type: "kalfetela", base_url: "https://127.0.0.1:9" },
+    });
+    expect(rejected.status).toBe(400);
+
+    const created = await call("/api/panels", {
+      method: "POST",
+      body: { name: "remote-1", type: "kalfetela", base_url: "https://127.0.0.1:9", api_token: "remote-token", tags: ["railway", "eu"] },
+    });
+    expect(created.status).toBe(201);
+    const panelId = created.json.data.panel.id;
+
+    const list = await call("/api/panels");
+    const listed = list.json.data.panels.find((panel: any) => panel.id === panelId);
+    expect(listed.tags).toEqual(["railway", "eu"]);
+    expect(listed).toHaveProperty("node_count");
+
+    const fleet = await call("/api/panels/fleet");
+    expect(fleet.status).toBe(200);
+    expect(fleet.json.data.panels.some((panel: any) => panel.id === panelId)).toBe(true);
+    expect(fleet.json.data.totals.panels).toBeGreaterThanOrEqual(1);
+
+    const summary = await call(`/api/panels/${panelId}/summary`);
+    expect(summary.status).toBe(200);
+    expect(summary.json.data.summary.online).toBe(false);
+    expect(String(summary.json.data.summary.error)).toBeTruthy();
+  });
+
   it("cuts a reseller off when their traffic quota is exhausted", async () => {
     const { applyUsage, createAdmin, createUser, enforceAdminQuotas, getUser, updateAdmin } = await import("../src/services/store.js");
     const reseller = await createAdmin({
@@ -323,6 +427,12 @@ describe("panel API", () => {
     await updateAdmin(reseller.id, { quota_bytes: 10 ** 6 });
     const again = await enforceAdminQuotas();
     expect(again.some((item) => item.admin.id === reseller.id)).toBe(false);
+
+    // topping the quota up must hand the accounts back
+    const released = await getUser(created.id);
+    expect(released?.status).toBe("active");
+    expect(released?.on_hold).toBe(0);
+    expect(released?.hold_reason).toBeNull();
   });
 
   it("keeps admin, plan and payment endpoints consistent", async () => {
