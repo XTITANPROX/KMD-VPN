@@ -233,3 +233,20 @@ pre.code {
   .row-2, .row-3 { grid-template-columns: 1fr; }
   .kv { grid-template-columns: 110px 1fr; }
 }
+
+/* --------------------- fleet, apps & QR components --------------------- */
+.steps { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); counter-reset: step; }
+.steps .step { position: relative; background: linear-gradient(160deg, #0c1426, #080d18); border: 1px solid var(--border-soft); border-radius: 14px; padding: 14px 16px 14px 18px; display: grid; gap: 6px; }
+.steps .step b { font-size: 13.5px; }
+.steps .step span { color: var(--muted); font-size: 12.5px; line-height: 1.7; }
+.apps { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); }
+.apps .app { display: grid; gap: 5px; text-decoration: none; color: inherit; background: linear-gradient(160deg, #0c1426, #080d18); border: 1px solid var(--border-soft); border-radius: 14px; padding: 13px 15px; transition: .18s; }
+.apps .app:hover { border-color: var(--accent); transform: translateY(-2px); }
+.apps .app b { font-size: 13.5px; }
+.apps .app .muted { color: var(--muted); font-size: 11.5px; }
+.apps .app .note { color: #6b81a5; font-size: 11px; line-height: 1.6; }
+.qr-box { display: inline-flex; padding: 14px; background: #fff; border-radius: 16px; }
+.qr-box img { width: 232px; height: 232px; display: block; image-rendering: pixelated; }
+.copy-row + .copy-row { margin-top: 8px; }
+.wg-peer { display: grid; grid-template-columns: 1fr auto; gap: 6px; padding: 8px 10px; border: 1px solid var(--border-soft); border-radius: 10px; margin-bottom: 6px; font-size: 12.5px; }
+.banner-warn { border-color: #7c5c14 !important; background: #1b1508 !important; }

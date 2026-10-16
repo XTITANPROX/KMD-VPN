@@ -4,7 +4,7 @@
 import type { Context, MiddlewareHandler, Next } from "hono";
 import { AGENT_SECRET, COOKIE_NAME } from "./env.js";
 import { getSession, tokenHasScope, type SessionRow } from "./services/auth.js";
-import { getApiToken } from "./services/store.js";
+import { getAdmin, getApiToken } from "./services/store.js";
 import { constantTimeEqual } from "./lib/crypto.js";
 import { ValidationError } from "./lib/validate.js";
 import type { AdminRow } from "./types.js";
@@ -108,8 +108,19 @@ export const requireApiAuth: MiddlewareHandler<{ Variables: AppVariables }> = as
     const token = await getApiToken(apiKey);
     if (!token) return c.json({ error: "کلید API نامعتبر است", code: "unauthorized" }, 401);
     c.set("apiToken", { id: token.id, name: token.name, scopes: token.scopes });
-    const owner = await getSession(sessionTokenFrom(c));
-    if (owner) c.set("admin", owner.admin);
+    // read-only tokens (scopes: `read`) may only read
+    const scopes = (token.scopes ?? "*").split(/[,|\s]+/).filter(Boolean);
+    const readOnly = !scopes.includes("*") && scopes.includes("read") && !scopes.includes("write");
+    if (readOnly && c.req.method !== "GET") {
+      return c.json({ error: "این کلید API فقط اجازه‌ی خواندن دارد", code: "forbidden" }, 403);
+    }
+    if (!c.get("admin")) {
+      // a session always wins; otherwise the token acts as its creator
+      const session = await getSession(sessionTokenFrom(c));
+      const acting = session?.admin ?? (token.created_by ? await getAdmin(token.created_by) : undefined);
+      if (!acting) return c.json({ error: "کلید API به مدیر معتبری متصل نیست", code: "unauthorized" }, 401);
+      c.set("admin", acting);
+    }
     await next();
     return;
   }

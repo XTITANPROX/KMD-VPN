@@ -7,7 +7,7 @@ import { streamSSE } from "hono/streaming";
 import { getDb, getSetting } from "../db/index.js";
 import { APP_NAME, APP_VERSION, DATA_DIR, IS_RAILWAY, XRAY_DIR } from "../env.js";
 import { jalaliDateTime } from "../lib/format.js";
-import { ok, requireAdmin, safe, type AppVariables } from "../middleware.js";
+import { ok, requireAdmin, requireApiAuth, safe, type AppVariables } from "../middleware.js";
 import { dashboardStats } from "../services/store.js";
 import { embeddedXray } from "../services/clients/local.js";
 import { checkUpdate, getUpdateInfo } from "../services/scheduler.js";
@@ -99,14 +99,14 @@ let startedAt = Math.floor(Date.now() / 1000);
 
 systemRoutes.get(
   "/info",
-  requireAdmin,
+  requireApiAuth,
   safe(async (c) => ok(c, await systemInfo()))
 );
 
 /** Live metrics stream used by the dashboard (SSE). */
 systemRoutes.get(
   "/stream",
-  requireAdmin,
+  requireApiAuth,
   (c) =>
     streamSSE(c, async (stream) => {
       let stopped = false;
@@ -138,7 +138,7 @@ systemRoutes.get(
 
 systemRoutes.get(
   "/update",
-  requireAdmin,
+  requireApiAuth,
   safe(async (c) => {
     const latest = await checkUpdate();
     return ok(c, { current: APP_VERSION, latest });
@@ -147,7 +147,7 @@ systemRoutes.get(
 
 systemRoutes.get(
   "/logs",
-  requireAdmin,
+  requireApiAuth,
   safe(async (c) => {
     const lines = Math.min(500, Number(c.req.query("lines") ?? 100));
     const readTail = (file: string) => {
@@ -178,7 +178,7 @@ systemRoutes.get(
 
 systemRoutes.get(
   "/config-check",
-  requireAdmin,
+  requireApiAuth,
   safe(async (c) => {
     const checks: Array<{ name: string; ok: boolean; detail: string }> = [];
     const settings = {

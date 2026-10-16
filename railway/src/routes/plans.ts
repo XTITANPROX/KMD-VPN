@@ -3,7 +3,7 @@
 import { Hono } from "hono";
 import { audit } from "../db/index.js";
 import { validate } from "../lib/validate.js";
-import { clientIp, ok, readJson, requireAdmin, safe, type AppVariables } from "../middleware.js";
+import { clientIp, ok, readJson, requireAdmin, requireApiAuth, safe, type AppVariables } from "../middleware.js";
 import { createPlan, deletePlan, getPlan, listPlans, updatePlan } from "../services/store.js";
 
 export const planRoutes = new Hono<{ Variables: AppVariables }>();
@@ -17,7 +17,7 @@ planRoutes.get(
 
 planRoutes.post(
   "/",
-  requireAdmin,
+  requireApiAuth,
   safe(async (c) => {
     const body = await readJson(c);
     const input = validate<{ name: string; price: number; days: number; data_gb: number; device_limit: number; speed_mbps: number }>(body, (v) => {
@@ -50,7 +50,7 @@ planRoutes.post(
 
 planRoutes.put(
   "/:id",
-  requireAdmin,
+  requireApiAuth,
   safe(async (c) => {
     const id = Number(c.req.param("id"));
     const plan = await getPlan(id);
@@ -69,7 +69,7 @@ planRoutes.put(
 
 planRoutes.delete(
   "/:id",
-  requireAdmin,
+  requireApiAuth,
   safe(async (c) => {
     const id = Number(c.req.param("id"));
     const plan = await getPlan(id);

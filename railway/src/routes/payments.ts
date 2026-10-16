@@ -4,7 +4,7 @@ import { Hono } from "hono";
 import { audit, getDb } from "../db/index.js";
 import { nowSeconds } from "../lib/format.js";
 import { gbToBytes } from "../lib/validate.js";
-import { clientIp, ok, readJson, requireAdmin, safe, type AppVariables } from "../middleware.js";
+import { clientIp, ok, readJson, requireAdmin, requireApiAuth, safe, type AppVariables } from "../middleware.js";
 import {
   createPayment,
   createUser,
@@ -28,7 +28,7 @@ import { fmtBytes, jalaliDate } from "../lib/format.js";
 
 export const paymentRoutes = new Hono<{ Variables: AppVariables }>();
 
-paymentRoutes.use("*", requireAdmin);
+paymentRoutes.use("*", requireApiAuth);
 
 paymentRoutes.get(
   "/",

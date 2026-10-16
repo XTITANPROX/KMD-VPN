@@ -181,6 +181,17 @@ function form(fields) {
           ${field.options.map((option) => `<option value="${esc(option.value)}" ${String(option.value) === String(field.value) ? "selected" : ""}>${esc(option.label)}</option>`).join("")}
         </select>`;
     }
+    if (field.type === "multi") {
+      const picked = new Set((Array.isArray(field.value) ? field.value : [field.value ?? ""]).map(String).filter(Boolean));
+      return `<label class="f">${esc(field.label)}</label><div class="chips">${field.options
+        .map(
+          (option) =>
+            `<label class="chip"><input type="checkbox" name="${field.name}" value="${esc(option.value)}" ${
+              picked.has(String(option.value)) ? "checked" : ""
+            } style="margin-inline-end:6px"/>${esc(option.label)}</label>`
+        )
+        .join("")}</div>`;
+    }
     if (field.type === "textarea") {
       return `<label class="f">${esc(field.label)}</label><textarea class="input" name="${field.name}" placeholder="${esc(field.placeholder ?? "")}">${esc(field.value ?? "")}</textarea>`;
     }
@@ -195,7 +206,22 @@ function formValues(root) {
   const values = {};
   for (const input of $$("input,select,textarea", root)) {
     if (!input.name) continue;
-    values[input.name] = input.type === "checkbox" ? input.checked : input.value;
+    let value;
+    if (input.type === "checkbox") {
+      if (input.value && input.value !== "on") {
+        // chip-style multi select: only checked chips contribute their value
+        if (!input.checked) continue;
+        value = input.value;
+      } else {
+        value = input.checked;
+      }
+    } else if (input.multiple) {
+      value = Array.from(input.selectedOptions).map((option) => option.value);
+    } else {
+      value = input.value;
+    }
+    if (input.name in values) values[input.name] = [].concat(values[input.name], value);
+    else values[input.name] = value;
   }
   return values;
 }
@@ -221,7 +247,7 @@ async function checkAuth() {
     S.permissions = me.data.permissions;
     return renderApp();
   } catch {
-    return renderLogin(true);
+    return renderLogin(status.data);
   }
 }
 
@@ -266,9 +292,18 @@ function renderInstall(data) {
   void data;
 }
 
-function renderLogin() {
+function renderLogin(status) {
   document.body.innerHTML = `<div id="view"></div><div id="toasts"></div>`;
   authShell(`
+    ${
+      status?.default_credentials
+        ? `<div class="card" style="border-color:#7c5c14;background:#1b1508;margin-bottom:12px">
+             <b style="font-size:13px">🔑 ورود پیش‌فرض</b>
+             <div class="hint" style="margin-top:4px">نام کاربری <span class="mono">admin</span> و رمز <span class="mono">admin</span> است.
+             بعد از ورود، از «حساب من» رمز را تغییر دهید.</div>
+           </div>`
+        : ""
+    }
     <label class="f">نام کاربری</label>
     <input class="input" id="l-user" autocomplete="username" placeholder="admin"/>
     <label class="f">رمز عبور</label>
@@ -337,11 +372,12 @@ function navItems() {
       group: "زیرساخت",
       links: [
         ["nodes", "نودها و هسته", "🌐"],
+        ["fleet", "فلیت پنل‌ها", "🚀"],
         ["panels", "پنل‌های متصل", "🔌"],
       ],
     },
     { group: "مالی و فروش", links: [["plans", "پلن‌ها", "💎"], ["finance", "پرداخت‌ها", "💰"]] },
-    { group: "پشتیبانی", links: [["tickets", "تیکت‌ها", "🎫"]] },
+    { group: "پشتیبانی", links: [["tickets", "تیکت‌ها", "🎫"], ["apps", "برنامه‌ها و QR", "📱"]] },
   ];
   if (S.permissions.owner) items.push({ group: "مدیریت", links: [["admins", "ادمین و نماینده", "🛡"], ["settings", "تنظیمات", "⚙️"]] });
   items.push({ group: "حساب", links: [["profile", "حساب من", "🙋"], ["logs", "سیستم", "🖥"]] });
@@ -349,6 +385,7 @@ function navItems() {
 }
 
 function renderApp() {
+  const defaultCreds = S.me?.default_password === true;
   const brand = S.settings.panel_name || "KalFetela";
   document.body.innerHTML = `
     <div class="app">
@@ -366,6 +403,14 @@ function renderApp() {
         </div>
       </aside>
       <main class="main">
+        ${
+          defaultCreds
+            ? `<div class="card" style="border-color:#7c5c14;background:#1b1508">
+                 <b>⚠️ رمز عبور پیش‌فرض فعال است</b>
+                 <div class="hint" style="margin-top:4px">برای امنیت پنل، همین حالا رمز را از بخش «حساب من» تغییر دهید.</div>
+               </div>`
+            : ""
+        }
         <div class="topbar">
           <button class="btn sm burger" id="burger">☰</button>
           <div><h1 id="page-title">داشبورد</h1><div class="sub" id="page-sub"></div></div>
@@ -431,6 +476,8 @@ const ROUTES = {
   users: renderUsers,
   nodes: renderNodes,
   panels: renderPanels,
+  fleet: renderFleet,
+  apps: renderApps,
   plans: renderPlans,
   finance: renderFinance,
   tickets: renderTickets,
@@ -588,8 +635,10 @@ function renderChart(series) {
 /* -------------------------------- users -------------------------------- */
 async function renderUsers() {
   setTitle("مدیریت کاربران", "ساخت، ویرایش و کنترل اکانت‌ها");
-  setActions(`<button class="btn sm primary" id="new-user">➕ کاربر جدید</button>`);
+  setActions(`<button class="btn sm" id="bulk-user">⚡ ساخت گروهی</button>
+    <button class="btn sm primary" id="new-user">➕ کاربر جدید</button>`);
   $("#new-user").onclick = () => userForm();
+  $("#bulk-user").onclick = () => bulkUserForm();
   $("#view").innerHTML = `
     <div class="card">
       <div class="toolbar">
@@ -609,6 +658,7 @@ async function renderUsers() {
           <option value="expiry">نزدیک‌ترین انقضا</option>
           <option value="name">نام</option>
         </select>
+        <input class="input" id="f-tag" style="width:150px" placeholder="برچسب…" value="${esc(S.filters.tag ?? "")}"/>
         <button class="btn" id="f-export">⬇️ خروجی CSV</button>
       </div>
       <div class="grid cols-5" id="user-summary" style="margin-bottom:14px"></div>
@@ -631,8 +681,98 @@ async function renderUsers() {
     S.filters.sort = event.target.value;
     loadUsers();
   };
+  $("#f-tag").onchange = (event) => {
+    S.filters.tag = event.target.value.trim();
+    S.users.page = 1;
+    loadUsers();
+  };
   $("#f-export").onclick = () => window.open("/api/users/export?format=csv", "_blank");
   await loadUsers();
+}
+
+/* -------------------------- bulk provisioning -------------------------- */
+
+async function bulkUserForm() {
+  const [nodeList, plans] = await Promise.all([api("/api/nodes"), api("/api/plans")]);
+  const nodes = nodeList.data.nodes;
+  const wrap = form([
+    { label: "پیش‌شماره نام کاربری", name: "prefix", value: "user", placeholder: "مثلاً kolbe" },
+    { label: "تعداد", name: "count", type: "number", value: 10 },
+    { label: "شماره شروع", name: "start", type: "number", value: 1 },
+    { label: "صفر‌های سمت چپ (نمونه: 3 → 001)", name: "padding", type: "number", value: 0 },
+    { label: "پسوند تصادفی (برای امنیت بیشتر)", name: "random_suffix", type: "select", value: "no", options: [
+      { value: "no", label: "خیر" },
+      { value: "yes", label: "بله" },
+    ] },
+    { label: "پلن", name: "plan_id", type: "select", value: "", options: [
+      { value: "", label: "— بدون پلن —" },
+      ...plans.data.plans.map((plan) => ({ value: String(plan.id), label: `${plan.name} — ${plan.data_gb}GB/${plan.days}روز` })),
+    ] },
+    { label: "حجم (GB) — اگر پلن انتخاب نشود", name: "data_gb", type: "number", value: 30 },
+    { label: "روز", name: "days", type: "number", value: 30 },
+    { label: "تعداد دستگاه", name: "device_limit", type: "number", value: 0 },
+    { label: "محدودیت سرعت (Mbps)", name: "speed_mbps", type: "number", value: 0 },
+    { label: "برچسب‌ها (با کاما)", name: "tags", value: "" , placeholder: "مشتری-A, فروش-مهر" },
+    { label: "نودها (چندانتخابی)", name: "node_ids", type: "multi", value: nodes.map((node) => String(node.id)), options: nodes.map((node) => ({ value: String(node.id), label: `${node.name} (${node.protocol})` })) },
+    { label: "یادداشت", name: "note", value: "" },
+  ]);
+  modal({
+    title: "ساخت گروهی کاربران",
+    wide: true,
+    body: `${wrap.outerHTML}<div class="hint" style="margin-top:10px">تا ۵۰۰ اکانت در هر درخواست. نام‌های تکراری خودکار کنار گذاشته می‌شوند؛
+      در پایان می‌توانید لیست لینک‌های ساب را یکجا کپی یا دانلود کنید.</div>`,
+    actions: [
+      {
+        label: "ساخت",
+        kind: "primary",
+        onClick: async () => {
+          const values = formValues(document.querySelector(".modal-body"));
+          const body = {
+            prefix: values.prefix,
+            count: Number(values.count || 1),
+            start: Number(values.start || 1),
+            padding: Number(values.padding || 0),
+            random_suffix: values.random_suffix === "yes",
+            plan_id: values.plan_id ? Number(values.plan_id) : undefined,
+            data_gb: Number(values.data_gb || 0),
+            days: Number(values.days || 30),
+            device_limit: Number(values.device_limit || 0),
+            speed_mbps: Number(values.speed_mbps || 0),
+            tags: values.tags,
+            note: values.note,
+            node_ids: values.node_ids,
+          };
+          const response = await api("/api/users/bulk-create", { method: "POST", body });
+          const created = response.data.created;
+          const base = location.origin;
+          const lines = created.map((user) => `${user.username}	${base}/sub/${user.sub_token}`);
+          modal({
+            title: `✅ ${fa(created.length)} اکانت ساخته شد`,
+            wide: true,
+            body: `<div class="muted">${fa(response.data.skipped.length)} مورد رد شد.</div>
+              <pre class="code" id="bulk-out">${esc(lines.join("\n"))}</pre>`,
+            actions: [
+              { label: "کپی همه لینک‌ها", onClick: async () => copyText(lines.join("\n")) },
+              {
+                label: "دانلود فایل",
+                onClick: async () => {
+                  const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
+                  const link = document.createElement("a");
+                  link.href = URL.createObjectURL(blob);
+                  link.download = `kalfetela-accounts-${Date.now()}.txt`;
+                  link.click();
+                },
+              },
+              { label: "بستن", kind: "primary" },
+            ],
+          });
+          loadUsers();
+          return true;
+        },
+      },
+      { label: "انصراف", kind: "ghost" },
+    ],
+  });
 }
 
 function debounce(fn, delay) {
@@ -650,6 +790,7 @@ async function loadUsers() {
     search: S.filters.search,
     status: S.filters.status,
     sort: S.filters.sort,
+    tag: S.filters.tag ?? "",
   });
   const response = await api(`/api/users?${params}`);
   S.users.items = response.data.users;
@@ -813,8 +954,10 @@ async function userForm(id) {
     { type: "html", html: `</div><div class="row-2">` },
     { label: "آیدی تلگرام", name: "telegram_id", value: user?.telegram_id ?? "" },
     { label: "ایمیل (اختیاری)", name: "email", value: user?.email ?? "" },
-    { type: "html", html: `</div>` },
+    { type: "html", html: `</div><div class="row-2">` },
     { label: "یادداشت", name: "note", value: user?.note ?? "" },
+    { label: "برچسب‌ها (با کاما جدا کنید)", name: "tags", value: (user?.tags ?? []).join(", "), placeholder: "مشتری-A, مهم" },
+    { type: "html", html: `</div>` },
   ]);
 
   const nodeBox = document.createElement("div");
@@ -887,6 +1030,7 @@ async function userForm(id) {
                 telegram_id: values.telegram_id,
                 email: values.email,
                 note: values.note,
+                tags: values.tags,
                 status: values.status,
                 reset_usage: values.reset_usage,
               },
@@ -905,6 +1049,7 @@ async function userForm(id) {
                 telegram_id: values.telegram_id,
                 email: values.email,
                 note: values.note,
+                tags: values.tags,
                 node_ids: nodeIds,
                 admin_id: values.admin_id ? Number(values.admin_id) : undefined,
               },
@@ -1114,6 +1259,178 @@ async function wireguardUserModal(id) {
       URL.revokeObjectURL(link.href);
     };
   });
+}
+
+/* -------------------------------- fleet -------------------------------- */
+
+async function renderFleet() {
+  setTitle("فلیت پنل‌ها", "مدیریت متمرکز ده‌ها پنل KalFetela روی Railway");
+  setActions(`<button class="btn sm" id="fleet-refresh">🔄 بروزرسانی</button>
+    <button class="btn sm primary" id="fleet-add">➕ افزودن پنل به فلیت</button>`);
+  $("#fleet-refresh").onclick = () => route();
+  $("#fleet-add").onclick = () => panelForm();
+
+  $("#view").innerHTML = `<div class="card"><div id="fleet-totals">${loadingBox()}</div></div>
+    <div class="card" style="margin-top:16px"><h3>🚀 پنل‌های فلیت</h3><div id="fleet-table">${loadingBox()}</div>
+      <div class="hint" style="margin-top:12px">
+        هر پنل KalFetela که روی Railway بالا آورده‌اید را با آدرس و <b>توکن API</b> (پنل مقصد → تنظیمات → API) اضافه کنید.
+        بعد از افزودن، از «اینباندها/نودها» دکمهٔ «ایمپورت» را بزنید: نودهای پنل مقصد به‌صورت نود محلی اضافه می‌شوند و
+        از آن به بعد ساختِ کاربر، مصرف و حذف، خودکار روی همان پنل انجام می‌شود.
+      </div>
+    </div>`;
+
+  try {
+    const response = await api("/api/panels/fleet");
+    const { panels, totals } = response.data;
+    const cards = [
+      { k: "پنل‌ها", v: `${fa(totals.online)}/${fa(totals.panels)}`, d: "آنلاین / کل", cls: totals.online === totals.panels ? "ok" : "warn" },
+      { k: "نودهای فلیت", v: fa(totals.nodes), d: `${fa(totals.local_users)} کاربر محلی`, cls: "" },
+      { k: "کاربران پنل‌های مقصد", v: fa(totals.remote_users), d: "جمع همه پنل‌ها", cls: "info" },
+      { k: "مصرف امروز فلیت", v: fmtBytes(totals.traffic_today), d: `درآمد کل: ${fmtToman(totals.revenue_total)}`, cls: "" },
+    ];
+    $("#fleet-totals").innerHTML = `<div class="grid cols-4">${cards
+      .map((card) => `<div class="stat ${card.cls}"><div class="k">${card.k}</div><div class="v" style="font-size:18px">${card.v}</div><div class="d">${card.d}</div></div>`)
+      .join("")}</div>`;
+
+    if (!panels.length) {
+      $("#fleet-table").innerHTML = `<div class="empty">هنوز پنلی به فلیت اضافه نشده است</div>`;
+      return;
+    }
+    $("#fleet-table").innerHTML = `<div class="table-wrap"><table><thead><tr>
+      <th>پنل</th><th>نوع</th><th>وضعیت</th><th>نودها</th><th>کاربران</th><th>مصرف امروز</th><th>منابع</th><th>عملیات</th>
+    </tr></thead><tbody>${panels
+      .map(
+        (panel) => `<tr>
+      <td><b>${esc(panel.name)}</b>
+        <div class="mono" style="font-size:11px;color:#7d90b3">${esc(panel.base_url)}</div>
+        ${(panel.tags ?? []).map((tag) => `<span class="pill" style="margin-inline-start:4px">${esc(tag)}</span>`).join("")}</td>
+      <td><span class="pill">${esc(panel.type)}</span></td>
+      <td>${panel.online ? '<span class="pill ok">آنلاین</span>' : `<span class="pill danger">${esc((panel.error ?? panel.last_error ?? "قطع").slice(0, 40))}</span>`}
+        <div style="font-size:10.5px;color:#7d90b3">${panel.latency_ms ? `${fa(panel.latency_ms)}ms` : ""} ${panel.last_checked_at ? timeAgo(panel.last_checked_at) : ""}</div></td>
+      <td>${fa(panel.node_count)} ${panel.nodes !== undefined ? `<span style="color:#7d90b3">(${fa(panel.nodes_online ?? 0)} آنلاین)</span>` : ""}</td>
+      <td>${panel.local_users !== undefined ? `${fa(panel.local_users)} محلی` : ""}${panel.users !== undefined ? `<div style="font-size:11px;color:#7d90b3">${fa(panel.users)} کل</div>` : ""}</td>
+      <td>${panel.traffic_today !== undefined ? fmtBytes(panel.traffic_today) : "—"}</td>
+      <td style="font-size:11.5px">CPU ${fa(Math.round(panel.cpu ?? 0))}٪<br/>RAM ${fa(Math.round(panel.ram_percent ?? 0))}٪</td>
+      <td><div class="chips">
+        <button class="btn sm" data-fleet="nodes" data-id="${panel.id}">⬇️ نودها</button>
+        <button class="btn sm" data-fleet="refresh" data-id="${panel.id}">🔄</button>
+        <button class="btn sm" data-fleet="users" data-id="${panel.id}">👥 کاربران</button>
+        <button class="btn sm" data-fleet="open" data-id="${panel.id}">↗️ بازکردن</button>
+      </div></td></tr>`
+      )
+      .join("")}</tbody></table></div>`;
+
+    $$("[data-fleet]").forEach((button) => {
+      button.onclick = () => fleetAction(button.dataset.fleet, Number(button.dataset.id));
+    });
+  } catch (error) {
+    $("#fleet-totals").innerHTML = `<div class="empty">${esc(error.message)}</div>`;
+    $("#fleet-table").innerHTML = "";
+  }
+}
+
+async function fleetAction(action, id) {
+  try {
+    if (action === "open") {
+      const panel = (await api("/api/panels")).data.panels.find((item) => item.id === id);
+      window.open(panel?.base_url ?? "", "_blank");
+      return;
+    }
+    if (action === "refresh") {
+      await api(`/api/panels/${id}/test`, { method: "POST" });
+      toast("پنل بررسی شد", "ok");
+      return route();
+    }
+    if (action === "users") {
+      const snapshots = await Promise.all((await api(`/api/nodes?`)).data.nodes.filter((node) => node.panel_id === id).map((node) => api(`/api/nodes/${node.id}/users`)));
+      const total = snapshots.reduce((sum, item) => sum + (item.data.users?.length ?? 0), 0);
+      toast(`${total} کاربر روی نودهای این پنل`, "info");
+      return;
+    }
+    if (action === "nodes") {
+      const inbounds = (await api(`/api/panels/${id}/inbounds`)).data.inbounds ?? [];
+      if (!inbounds.length) {
+        toast("نودی در پنل مقصد پیدا نشد", "warn");
+        return;
+      }
+      const host = prompt("دامنه/آی‌پی که کاربران به آن وصل شوند (خالی = آدرس خود پنل مقصد)", "");
+      const result = await api(`/api/panels/${id}/import`, { method: "POST", body: { inbounds, host: host ?? "" } });
+      toast(`${fa(result.data.created.length)} نود اضافه شد`, "ok");
+      return route();
+    }
+  } catch (error) {
+    toast(error.message, "err");
+  }
+}
+
+/* ------------------------- apps, QR & guides --------------------------- */
+
+async function renderApps() {
+  setTitle("برنامه‌ها و QR", "کلاینت‌های پیشنهادی و ساخت QR برای لینک ساب");
+  setActions("");
+  const response = await api("/api/public/apps");
+  const { apps, steps } = response.data;
+  const users = (await api("/api/users?per_page=100&with_tokens=1")).data.users;
+  $("#view").innerHTML = `
+    <div class="card">
+      <h3>🔳 ساخت QR برای لینک ساب</h3>
+      <div class="row-2" style="align-items:end">
+        <div><label class="f">لینک ساب یا هر متن دیگر</label><input class="input" id="qr-text" placeholder="https://.../sub/xxxx"/></div>
+        <div><label class="f">یا کاربر را انتخاب کنید</label><select class="input" id="qr-user">
+          <option value="">— انتخاب کاربر —</option>
+          ${users.map((user) => `<option value="${user.id}" data-token="${esc(user.sub_token ?? "")}">${esc(user.username)}</option>`).join("")}
+        </select></div>
+      </div>
+      <div class="chips" style="margin-top:12px">
+        <button class="btn primary" id="qr-make">ساخت QR</button>
+        <button class="btn" id="qr-download" disabled>⬇️ دانلود SVG</button>
+        <button class="btn" id="qr-copy" disabled>📋 کپی لینک</button>
+      </div>
+      <div id="qr-out" style="margin-top:16px"></div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h3>📱 راهنمای اتصال</h3>
+      <div class="steps">${steps.map((step) => `<div class="step"><b>${esc(step.title)}</b><span>${esc(step.body)}</span></div>`).join("")}</div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h3>⬇️ کلاینت‌های پیشنهادی</h3>
+      <div class="apps">${apps
+        .map(
+          (app) => `<a class="app" href="${app.url}" target="_blank" rel="noreferrer">
+        <b>${esc(app.name)} ${app.featured ? "⭐" : ""}</b>
+        <span class="muted">${app.platforms.map((p) => esc(p)).join(" · ")}</span>
+        <span class="note">${esc(app.note)}</span>
+        <span class="note mono">فرمت: ${app.formats.join(" / ")}</span>
+      </a>`
+        )
+        .join("")}</div>
+    </div>`;
+
+  const makeQr = () => {
+    const manual = $("#qr-text").value.trim();
+    const selected = $("#qr-user");
+    const option = selected.selectedOptions[0];
+    const token = option?.dataset.token ?? "";
+    const base = location.origin;
+    const url = manual || (token ? `${base}/sub/${token}` : "");
+    if (!url) return toast("یک لینک وارد کنید یا کاربر را انتخاب کنید", "warn");
+    $("#qr-text").value = url;
+    $("#qr-out").innerHTML = `<div class="qr-box"><img alt="QR" src="/api/qr?data=${encodeURIComponent(url)}&scale=6"/></div>
+      <div class="copy-row"><input class="input" readonly value="${esc(url)}"/><button class="btn sm" id="qr-inline-copy">کپی</button></div>
+      <div class="hint" style="margin-top:8px">با دوربین گوشی اسکن کنید تا لینک ساب مستقیم در برنامه اضافه شود.</div>`;
+    $("#qr-inline-copy").onclick = () => copyText(url);
+    $("#qr-download").disabled = false;
+    $("#qr-copy").disabled = false;
+    $("#qr-download").onclick = () => window.open(`/api/qr?data=${encodeURIComponent(url)}&scale=10`, "_blank");
+    $("#qr-copy").onclick = () => copyText(url);
+  };
+  $("#qr-make").onclick = makeQr;
+  $("#qr-user").onchange = () => {
+    if ($("#qr-user").value) makeQr();
+  };
+  $("#qr-text").onkeydown = (event) => {
+    if (event.key === "Enter") makeQr();
+  };
 }
 
 /* -------------------------------- nodes -------------------------------- */
@@ -1338,6 +1655,10 @@ async function nodeForm(id) {
       <div><label class="f">پورت</label><input class="input" name="port" type="number" value="${esc(node?.port ?? 10001)}"/></div>
     </div>
     <div class="row-3">
+      <div><label class="f">برچسب‌ها (با کاما)</label><input class="input" name="tags" value="${(node?.tags ?? []).join(", ")}" placeholder="آلمان, پرسرعت, مشتری-A"/></div>
+      <div><label class="f">ترتیب نمایش</label><input class="input" name="sort" type="number" value="${esc(node?.sort ?? 0)}"/></div>
+    </div>
+    <div class="row-3">
       <div><label class="f">SNI / Host هدر</label><input class="input" name="sni" value="${esc(node?.sni ?? "")}"/></div>
       <div><label class="f">Path (ws)</label><input class="input" name="path" value="${esc(node?.path ?? "/ws")}"/></div>
       <div><label class="f">ServiceName (grpc)</label><input class="input" name="service_name" value="${esc(node?.service_name ?? "")}"/></div>
@@ -1421,11 +1742,21 @@ async function renderPanels() {
   setTitle("پنل‌های متصل", "ورود به 3x-ui / مرزبان و ایمپورت اینباندها");
   setActions(`<button class="btn sm primary" id="new-panel">➕ افزودن پنل</button>`);
   $("#new-panel").onclick = () => panelForm();
-  const response = await api("/api/panels");
+  const [response, fleet] = await Promise.all([api("/api/panels"), api("/api/panels/fleet").catch(() => null)]);
   const panels = response.data.panels;
+  const rows = fleet?.data?.panels ?? [];
+  const live = Object.fromEntries(rows.map((row) => [row.id, row]));
+  const totals = fleet?.data?.totals;
   $("#view").innerHTML = `
+    ${totals ? `<div class="grid cols-5" style="margin-bottom:16px">
+      <div class="stat"><div class="k">پنل‌ها</div><div class="v">${fa(totals.panels)}</div><div class="d">${fa(totals.online)} آنلاین</div></div>
+      <div class="stat"><div class="k">ایمپورت‌شده</div><div class="v">${fa(totals.nodes)}</div><div class="d">${fa(totals.local_users)} کاربر محلی</div></div>
+      <div class="stat"><div class="k">کاربران پنل‌های مقصد</div><div class="v">${fa(totals.remote_users)}</div><div class="d">مجموع همه پنل‌ها</div></div>
+      <div class="stat"><div class="k">مصرف امروز فلیت</div><div class="v">${fmtBytes(totals.traffic_today)}</div><div class="d">از پنل‌های KalFetela</div></div>
+      <div class="stat"><div class="k">درآمد پنل‌های مقصد</div><div class="v">${fmtToman(totals.revenue_total)}</div><div class="d">مجموع</div></div>
+    </div>` : ""}
     <div class="card">
-      <h3>🔌 پنل‌های خارجی</h3>
+      <h3>🔌 پنل‌ها و فلیت (چندین اکانت / سرور روی Railway)</h3>
       <div id="panel-table"></div>
       <div class="hint" style="margin-top:12px">
         رمز ورود پنل‌های خارجی در دیتابیس ذخیره می‌شود؛ برای امنیت بیشتر از توکن API یا دسترسی محدود استفاده کنید.
@@ -1436,14 +1767,20 @@ async function renderPanels() {
       ${panels
         .map(
           (panel) => `<tr>
-        <td><b>${esc(panel.name)}</b></td>
-        <td><span class="pill">${esc(panel.type)}</span></td>
+        <td><b>${esc(panel.name)}</b>
+          ${(panel.tags ?? []).map((tag) => `<span class="pill" style="margin-inline-start:4px">${esc(tag)}</span>`).join("")}
+          ${panel.node_count ? `<div style="font-size:11px;color:#7d90b3">${fa(panel.node_count)} نود · ${fa(panel.local_users ?? 0)} کاربر محلی</div>` : ""}
+          ${live[panel.id]?.users !== undefined ? `<div style="font-size:11px;color:#7d90b3">پنل مقصد: ${fa(live[panel.id].users)} کاربر · ${fmtBytes(live[panel.id].traffic_today ?? 0)} امروز</div>` : ""}
+        </td>
+        <td><span class="pill">${esc(panel.type)}</span>${live[panel.id]?.latency_ms ? `<div style="font-size:11px;color:#7d90b3">${fa(live[panel.id].latency_ms)}ms</div>` : ""}</td>
         <td class="mono">${esc(panel.base_url)}</td>
         <td>${statusPill(panel.status)}<div style="font-size:11px;color:#7d90b3">${esc((panel.last_error ?? "").slice(0, 60))}</div></td>
         <td>${panel.last_checked_at ? timeAgo(panel.last_checked_at) : "—"}</td>
         <td><div class="chips">
           <button class="btn sm" data-panel-act="test" data-id="${panel.id}">🔍 تست</button>
           <button class="btn sm" data-panel-act="import" data-id="${panel.id}">⬇️ ایمپورت اینباند</button>
+          ${panel.type === "kalfetela" ? `<button class="btn sm ok" data-panel-act="import-all" data-id="${panel.id}" title="همه‌ی نودهای پنل مقصد را یکجا اضافه کن">⚡ ایمپورت همه</button>` : ""}
+          <button class="btn sm" data-panel-act="sync" data-id="${panel.id}" title="وضعیت و مصرف کاربران را از پنل مقصد بخوان">🤝 همگام‌سازی</button>
           <button class="btn sm" data-panel-act="edit" data-id="${panel.id}">✏️</button>
           <button class="btn sm danger" data-panel-act="delete" data-id="${panel.id}">🗑</button>
         </div></td></tr>`
@@ -1465,6 +1802,21 @@ async function renderPanels() {
         if (action === "test") {
           const result = await api(`/api/panels/${id}/test`, { method: "POST" });
           toast(`اتصال برقرار شد — ${fa(result.data.inbounds.length)} اینباند`, "ok");
+          return route();
+        }
+        if (action === "import-all") {
+          const result = await api(`/api/panels/${id}/inbounds`);
+          const inbounds = result.data.inbounds ?? [];
+          if (!inbounds.length) return toast("نودی در پنل مقصد پیدا نشد", "warn");
+          const response = await api(`/api/panels/${id}/import`, { method: "POST", body: { inbounds } });
+          toast(`${fa(response.data.created.length)} نود اضافه شد`, "ok");
+          return route();
+        }
+        if (action === "sync") {
+          const nodes = (await api("/api/nodes")).data.nodes.filter((node) => node.panel_id === id);
+          const results = await Promise.allSettled(nodes.map((node) => api(`/api/nodes/${node.id}/sync`, { method: "POST" })));
+          const okCount = results.filter((item) => item.status === "fulfilled").length;
+          toast(`${fa(okCount)} از ${fa(nodes.length)} نود همگام شد`, okCount ? "ok" : "warn");
           return route();
         }
         if (action === "import") {
@@ -1514,6 +1866,7 @@ function panelForm(panel) {
   const wrap = form([
     { label: "نام پنل", name: "name", value: panel?.name ?? "", placeholder: "آلمان ۱" },
     { label: "نوع", name: "type", type: "select", value: panel?.type ?? "x-ui", options: [
+      { value: "kalfetela", label: "🚀 KalFetela (فلیت)" },
       { value: "x-ui", label: "3x-ui" },
       { value: "sanaei", label: "Sanaei" },
       { value: "alireza", label: "Alireza" },
@@ -1523,9 +1876,20 @@ function panelForm(panel) {
     { label: "آدرس پنل (با https://)", name: "base_url", value: panel?.base_url ?? "", placeholder: "https://panel.example.com:2053" },
     { label: "نام کاربری", name: "username", value: panel?.username ?? "" },
     { label: "رمز عبور", name: "password", type: "password", value: panel?.password ?? "" },
-    { label: "توکن API (اختیاری — برای 3x-ui)", name: "api_token", value: panel?.api_token ?? "" },
+    { label: "توکن API (برای KalFetela و 3x-ui لازم است)", name: "api_token", value: panel?.api_token ?? "" },
+    { label: "برچسب‌ها (با کاما جدا کنید)", name: "tags", value: (panel?.tags ?? []).join(", "), placeholder: "آلمان, پرسرعت" },
+    { label: "یادداشت", name: "notes", value: panel?.notes ?? "" },
     { label: "مسیر پایه (اختیاری)", name: "base_path", value: (panel?.extra && (() => { try { return JSON.parse(panel.extra).base_path ?? ""; } catch { return ""; } })()) || "", placeholder: "xui" },
   ]);
+  wrap.insertAdjacentHTML(
+    "afterbegin",
+    `<div class="hint" style="margin-bottom:10px">
+      <b>KalFetela (فلیت):</b> آدرس ریشه‌ی پنل مقصد (مثلاً <span class="mono">https://xxx.up.railway.app</span>) را بگذارید و
+      «توکن API» را از آن پنل بسازید: <b>تنظیمات → API</b> → ساخت کلید (<span class="mono">kf_…</span>).
+      بعد از افزودن، با دکمه‌ی «ایمپورت همه» تمام نودهای آن پنل به‌عنوان نود اینجا اضافه می‌شوند و
+      ساخت/حذف/مصرف کاربران از همین پنل مدیریت می‌شود.
+    </div>`
+  );
   modal({
     title: panel ? "ویرایش پنل" : "افزودن پنل",
     body: wrap,
@@ -1542,6 +1906,8 @@ function panelForm(panel) {
             username: values.username,
             password: values.password,
             api_token: values.api_token,
+            tags: values.tags,
+            notes: values.notes,
             extra: values.base_path ? { base_path: values.base_path } : null,
           };
           if (panel) await api(`/api/panels/${panel.id}`, { method: "PUT", body });

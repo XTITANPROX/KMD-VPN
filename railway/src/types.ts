@@ -49,6 +49,8 @@ export interface PanelRow {
   last_error: string | null;
   last_checked_at: number | null;
   created_at: number;
+  tags?: string | null;
+  notes?: string | null;
 }
 
 export interface NodeRow {
@@ -89,6 +91,7 @@ export interface NodeRow {
   sort: number;
   active: number;
   created_at: number;
+  tags?: string | null;
   updated_at: number;
   agent_secret?: string | null;
   xray_json?: string | null;
@@ -129,6 +132,7 @@ export interface UserRow {
   updated_at: number;
   hwid?: string | null;
   on_hold?: number;
+  tags?: string | null;
   hold_reason?: string | null;
   ping_ms?: number | null;
 }

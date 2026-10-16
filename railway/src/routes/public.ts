@@ -5,6 +5,8 @@ import { audit, getDb, getSetting, getSettings } from "../db/index.js";
 import { AGENT_SECRET, PUBLIC_URL } from "../env.js";
 import { nowSeconds } from "../lib/format.js";
 import { agentAuthorized, clientIp, observeBase, ok, readJson, requestBase, safe } from "../middleware.js";
+import { CLIENT_APPS, SETUP_STEPS } from "../lib/clients.js";
+import { qrSvg } from "../lib/qr.js";
 import { applyUsage, createTicket, getNode, getUserBySubToken, listPlans, listUsers, refreshUserStatus, updateNode } from "../services/store.js";
 import { buildClashConfig, buildLinks, buildSingboxConfig, buildXrayConfig, subscriptionHtml, subscriptionPayload } from "../services/links.js";
 import { wireguardKeysForUser, wireguardNodePayload } from "../services/wireguard.js";
@@ -67,16 +69,34 @@ export async function subscriptionResponse(user: UserRow, format: string, userAg
           .join("\n"),
         contentType: "text/plain; charset=utf-8",
       };
-    case "page":
+    case "page": {
+      const base = `${origin || (PUBLIC_URL ? `https://${PUBLIC_URL}` : "")}/sub/${user.sub_token}`;
+      const urls = {
+        base64: base,
+        clash: `${base}?format=clash`,
+        singbox: `${base}?format=singbox`,
+        xray: `${base}?format=xray`,
+        raw: `${base}?format=raw`,
+      };
       return {
         body: subscriptionHtml(user, buildLinks(user, nodes, options), {
           panelName: settings.panel_name,
           supportId: settings.support_id,
-          subscriptionUrl: `${origin || (PUBLIC_URL ? `https://${PUBLIC_URL}` : "")}/sub/${user.sub_token}`,
+          subscriptionUrl: base,
           announce: settings.announcement_active === "true" ? settings.announcement : undefined,
+          formats: [
+            { key: "base64", label: "ساب Base64", url: urls.base64 },
+            { key: "clash", label: "Clash / Mihomo", url: urls.clash },
+            { key: "singbox", label: "sing-box", url: urls.singbox },
+            { key: "xray", label: "Xray", url: urls.xray },
+            { key: "raw", label: "لینک خام", url: urls.raw },
+          ],
+          deep: { raw: urls.raw, clash: urls.clash, singbox: urls.singbox, xray: urls.xray },
+          note: settings.support_channel ? `کانال: ${settings.support_channel}` : undefined,
         }),
         contentType: "text/html; charset=utf-8",
       };
+    }
     default:
       return { body: subscriptionPayload(buildLinks(user, nodes, options)), contentType: "text/plain; charset=utf-8" };
   }
@@ -361,6 +381,28 @@ publicRoutes.get(
       })),
       config: payload.config,
     });
+  })
+);
+
+/** Client apps + setup guide, consumed by the landing page and the panel. */
+publicRoutes.get(
+  "/api/public/apps",
+  safe(async (c) => {
+    return ok(c, { apps: CLIENT_APPS, steps: SETUP_STEPS });
+  })
+);
+
+/** QR code rendering (UTF-8 text in the query string). */
+publicRoutes.get(
+  "/api/qr",
+  safe(async (c) => {
+    const data = c.req.query("data") ?? c.req.query("text") ?? "";
+    if (!data) return c.json({ error: "پارامتر data لازم است", code: "validation" }, 400);
+    if (data.length > 250) return c.json({ error: "متن طولانی است", code: "too_long" }, 400);
+    const scale = Math.min(16, Math.max(2, Number(c.req.query("scale") ?? 6)));
+    const light = c.req.query("dark") ?? "0b1220";
+    const svg = qrSvg(data, { scale, dark: `#${light.replace(/^#/, "")}`, light: c.req.query("bg") === "transparent" ? "none" : "#ffffff" });
+    return c.body(svg, 200, { "content-type": "image/svg+xml; charset=utf-8", "cache-control": "public, max-age=3600" });
   })
 );
 

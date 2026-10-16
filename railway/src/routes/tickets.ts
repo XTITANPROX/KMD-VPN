@@ -2,14 +2,14 @@
 
 import { Hono } from "hono";
 import { audit } from "../db/index.js";
-import { clientIp, ok, readJson, requireAdmin, safe, type AppVariables } from "../middleware.js";
+import { clientIp, ok, readJson, requireAdmin, requireApiAuth, safe, type AppVariables } from "../middleware.js";
 import { addTicketMessage, createTicket, deleteTicket, getTicket, listTickets, updateTicket } from "../services/store.js";
 import { notifyAdmins, sendTelegramMessage } from "../services/telegram.js";
 import { escapeHtml } from "../services/telegram.js";
 
 export const ticketRoutes = new Hono<{ Variables: AppVariables }>();
 
-ticketRoutes.use("*", requireAdmin);
+ticketRoutes.use("*", requireApiAuth);
 
 ticketRoutes.get(
   "/",
