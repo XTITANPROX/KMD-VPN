@@ -1,0 +1,15 @@
+{
+  "name": "KalFetela Panel",
+  "short_name": "KalFetela",
+  "description": "پنل مدیریت کاربران و اکانت‌های VPN",
+  "start_url": "/KalFetela",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#04060c",
+  "theme_color": "#04060c",
+  "dir": "rtl",
+  "lang": "fa-IR",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

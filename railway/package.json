@@ -1,0 +1,36 @@
+{
+  "name": "kalfetela-railway-panel",
+  "version": "2.0.0",
+  "description": "KalFetela Panel — Railway/Node multi-user VPN management panel (VLESS/Trojan/VMess/SS/WireGuard) with embedded Xray core, Telegram shop bot, resellers and billing.",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-or-later",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "xray:download": "bash scripts/download-xray.sh"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.5",
+    "better-sqlite3": "^13.0.3",
+    "hono": "^4.13.13",
+    "pg": "^8.23.1",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^26.6.5",
+    "@types/pg": "^8.15.6",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.12"
+  }
+}
