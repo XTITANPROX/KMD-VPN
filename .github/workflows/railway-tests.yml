@@ -1,0 +1,49 @@
+name: KalFetela Railway panel — tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "railway/**"
+      - ".github/workflows/railway-tests.yml"
+  pull_request:
+    paths:
+      - "railway/**"
+      - ".github/workflows/railway-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: railway
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: railway/package-lock.json
+
+      # better-sqlite3 may need to build from source on some runners
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends python3 make g++
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps || npm install --legacy-peer-deps
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Unit / API tests
+        run: npm test
+
+      - name: Build
+        run: npm run build

@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#04060c" />
+  <title>KalFetela — سرویس امن و پرسرعت</title>
+  <link rel="icon" href="/icon.svg" />
+  <link rel="stylesheet" href="/style.css" />
+  <style>
+    @font-face {
+      font-family: Vazirmatn;
+      font-style: normal;
+      font-weight: 100 900;
+      font-display: swap;
+      src: url("https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/fonts/webfonts/Vazirmatn[wght].woff2") format("woff2");
+    }
+    body { background: radial-gradient(900px 480px at 100% 0%, rgba(34,211,238,.12), transparent 60%), radial-gradient(800px 420px at 0% 100%, rgba(139,92,246,.12), transparent 60%), #04060c; }
+    .hero { padding: 64px 20px 28px; text-align: center; }
+    .hero img { width: 92px; height: 92px; filter: drop-shadow(0 0 22px rgba(34,211,238,.45)); }
+    .hero h1 { font-size: 34px; margin: 14px 0 8px; background: linear-gradient(90deg,#67e8f9,#a78bfa); -webkit-background-clip: text; background-clip: text; color: transparent; }
+    .hero p { color: var(--muted); max-width: 620px; margin: 0 auto; line-height: 2; }
+    .wrap { max-width: 1080px; margin: 0 auto; padding: 0 18px 70px; }
+    .plan { display: flex; flex-direction: column; gap: 8px; }
+    .plan .price { font-size: 24px; font-weight: 800; color: #a5f3fc; }
+    .plan ul { list-style: none; padding: 0; margin: 10px 0; color: #c4d3ea; font-size: 13.5px; line-height: 2.1; }
+    .plan .tag { position: absolute; margin-top: -10px; margin-inline-start: -10px; }
+    footer { text-align: center; color: #5c6d8c; font-size: 12.5px; padding: 24px; }
+  </style>
+</head>
+<body>
+  <div class="hero">
+    <img src="/icon.svg" alt="KalFetela" />
+    <h1 id="panel-name">KalFetela</h1>
+    <p id="tagline">سرویس امن، پرسرعت و بدون محدودیت — با پروتکل‌های VLESS، Trojan، VMess و WireGuard</p>
+  </div>
+  <div class="wrap">
+    <div class="grid cols-3" id="plans"></div>
+    <div class="grid cols-2" style="margin-top:26px">
+      <div class="card">
+        <h3>🎫 پشتیبانی و سفارش</h3>
+        <div class="hint" id="support-info">در حال بارگذاری…</div>
+        <label class="f">نام</label><input class="input" id="c-name" placeholder="نام شما"/>
+        <label class="f">ایمیل یا آیدی تلگرام</label><input class="input" id="c-contact" placeholder="برای پاسخ سریع‌تر"/>
+        <label class="f">پیام</label><textarea class="input" id="c-message" placeholder="سوال یا درخواست شما…"></textarea>
+        <div class="chips" style="margin-top:12px"><button class="btn primary" id="c-send">ارسال پیام</button></div>
+      </div>
+      <div class="card">
+        <h3>⚡ چرا KalFetela؟</h3>
+        <ul style="line-height: 2.2; color:#c4d3ea; font-size:13.5px">
+          <li>✅ سازگار با همه اپ‌ها: v2rayNG، Streisand، Clash، sing-box، Hiddify</li>
+          <li>✅ لینک اشتراک خودکار و QR برای اتصال در ۱۰ ثانیه</li>
+          <li>✅ مقاوم‌سازی با REALITY و Fragment برای عبور از فیلترینگ</li>
+          <li>✅ گزارش مصرف لحظه‌ای، تمدید و افزایش حجم در ربات تلگرام</li>
+          <li>✅ مسیریابی هوشمند: سایت‌های ایرانی مستقیم</li>
+        </ul>
+        <div class="chips" style="margin-top:14px"><a class="btn violet" href="/panel">🖥 ورود مدیران</a></div>
+      </div>
+    </div>
+  </div>
+  <footer id="footer">KalFetela — ساخته شده با ❤️ روی Railway</footer>
+
+  <script>
+    const $ = (s) => document.querySelector(s);
+    const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const fa = (v) => String(v ?? "").replace(/\d/g, (d) => "۰۱۲۳۴۵۶۷۸۹"[d]);
+    const toman = (v) => `${fa(new Intl.NumberFormat("en-US").format(v || 0))} تومان`;
+
+    async function load() {
+      try {
+        const response = await fetch("/api/public/info");
+        const { data } = await response.json();
+        document.title = `${data.panel_name} — خرید سرویس`;
+        $("#panel-name").textContent = data.panel_name;
+        if (data.tagline) $("#tagline").textContent = data.tagline;
+        if (data.announcement) {
+          document.querySelector(".hero").insertAdjacentHTML("beforeend", `<div class="card" style="max-width:620px;margin:18px auto 0">📢 ${esc(data.announcement)}</div>`);
+        }
+        $("#plans").innerHTML = (data.plans || [])
+          .map(
+            (plan, index) => `<div class="card plan">
+            ${index === 1 ? '<span class="pill violet tag">پرفروش</span>' : ""}
+            <b style="font-size:17px">${esc(plan.name)}</b>
+            <div class="price">${toman(plan.price)}</div>
+            <ul>
+              <li>📦 ${plan.data_gb ? `${fa(plan.data_gb)} گیگابایت` : "حجم نامحدود"}</li>
+              <li>⏳ ${plan.days ? `${fa(plan.days)} روز` : "بدون انقضا"}</li>
+              <li>📱 ${plan.device_limit ? `${fa(plan.device_limit)} دستگاه` : "دستگاه نامحدود"}</li>
+              ${plan.speed_mbps ? `<li>⚡ تا ${fa(plan.speed_mbps)} Mbps</li>` : ""}
+              ${plan.description ? `<li>📝 ${esc(plan.description)}</li>` : ""}
+            </ul>
+            <button class="btn primary block" data-plan="${plan.id}">خرید / سفارش</button>
+          </div>`
+          )
+          .join("");
+        $("#support-info").innerHTML =
+          `${data.support_id ? `آیدی پشتیبانی: <b>${esc(data.support_id)}</b><br/>` : ""}` +
+          `${data.channel_link ? `<a target="_blank" href="${esc(data.channel_link)}">کانال ما</a><br/>` : ""}` +
+          `${data.shop_enabled ? "خرید خودکار از طریق ربات تلگرام فعال است." : "برای خرید با پشتیبانی در تماس باشید."}` +
+          `${data.card ? `<br/>کارت: <b class="mono">${esc(data.card.number)}</b> به نام ${esc(data.card.holder)}` : ""}`;
+        $("#footer").textContent = `${data.panel_name} — ${data.server_location || "Railway"}`;
+      } catch (error) {
+        $("#plans").innerHTML = `<div class="empty">اطلاعات پلن‌ها در دسترس نیست</div>`;
+      }
+    }
+
+    $("#c-send").onclick = async () => {
+      const message = $("#c-message").value.trim();
+      if (!message) return alert("متن پیام را وارد کنید");
+      try {
+        const response = await fetch("/api/public/ticket", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ subject: "پیام از صفحه فروش", message, name: $("#c-name").value.trim() }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "خطا");
+        alert(`پیام شما ثبت شد (شماره ${data.data.ticket_id}). به‌زودی پاسخ می‌گیرید.`);
+        $("#c-message").value = "";
+      } catch (error) {
+        alert(error.message);
+      }
+    };
+
+    document.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-plan]");
+      if (!button) return;
+      alert("برای خرید، به پشتیبانی تلگرام پیام دهید یا از ربات خرید استفاده کنید.");
+    });
+
+    load();
+  </script>
+</body>
+</html>
