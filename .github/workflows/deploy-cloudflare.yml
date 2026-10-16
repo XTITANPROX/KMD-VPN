@@ -1,6 +1,8 @@
 name: Deploy KALFETELA to Cloudflare
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       worker_name:
@@ -40,8 +42,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          HANDSHAKE_ID: ${{ inputs.handshake_id }}
-          WORKER_NAME: ${{ inputs.worker_name }}
+          HANDSHAKE_ID: ${{ inputs.handshake_id || github.sha }}
+          WORKER_NAME: ${{ inputs.worker_name || 'kalfetela' }}
         run: |
           set -euo pipefail
 
