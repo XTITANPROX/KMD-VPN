@@ -1,0 +1,55 @@
+// Plain row types mirroring the Drizzle schema for use in SQL
+// queries (we sometimes write raw SQL for speed / dynamic queries).
+
+export type UserRow = {
+  id: number;
+  username: string;
+  uuid: string;
+  trojan_hash?: string | null;
+  limit_gb: number | null;
+  used_gb: number;
+  lifetime_gb: number;
+  expiry_days: number | null;
+  limit_req: number | null;
+  used_req: number;
+  ip_limit: number | null;
+  active_ips: string | null;
+  connection_type: string;
+  tls: string;
+  port: number;
+  path: string;
+  sni_host: string | null;
+  fingerprint: string;
+  fragment: string | null;
+  cipher_suites: string | null;
+  alpn: string;
+  allow_insecure: number;
+  block_porn: number;
+  block_ads: number;
+  block_malware: number;
+  doh_url: string | null;
+  route_direct: string | null;
+  route_block: string | null;
+  user_proxy_iata: string | null;
+  user_socks5: string | null;
+  user_proxy_ip: string | null;
+  auto_rotate_proxy: number;
+  auto_rotate_ip: number;
+  rotate_minutes: number;
+  ip_operator: string;
+  ip_count: number;
+  ips: string | null;
+  last_rotate_time: number;
+  auto_reset_vol_days: number;
+  auto_reset_req_days: number;
+  last_reset_vol_time: number;
+  last_reset_req_time: number;
+  is_active: number;
+  start_on_first_connect: number;
+  first_connection_time: number | null;
+  last_active: number | null;
+  note: string | null;
+  group_id: number | null;
+  created_at: number | string;
+  updated_at: number;
+};

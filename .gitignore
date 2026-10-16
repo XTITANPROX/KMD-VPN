@@ -1,0 +1,12 @@
+node_modules
+.wrangler
+
+.dev.vars
+*.log
+.DS_Store
+.env
+.env.*
+CONFIG.txt
+
+wrangler.toml.bak
+dist/
