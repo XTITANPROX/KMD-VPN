@@ -1,5 +1,5 @@
 # KalFetela Panel — Railway / Docker image
-# Stage 1: build (TypeScript → dist, native modules compiled)
+# Stage 1: build (TypeScript → dist, native modules compiled with build tools)
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
 
@@ -14,6 +14,10 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build
 
+# Drop dev dependencies (typescript, vitest, tsx, …) and keep the compiled
+# native modules, so the runtime stage does not need a compiler at all.
+RUN npm prune --omit=dev --legacy-peer-deps && npm cache clean --force
+
 # Stage 2: runtime
 FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
@@ -27,9 +31,8 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* \
  && mkdir -p /data /data/xray
 
-COPY package.json package-lock.json* .npmrc* ./
-RUN npm install --omit=dev --no-audit --no-fund --legacy-peer-deps && npm cache clean --force
-
+COPY package.json ./
+COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY public ./public
 COPY agent ./agent
