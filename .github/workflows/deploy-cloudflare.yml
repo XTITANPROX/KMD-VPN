@@ -7,9 +7,13 @@ on:
         description: Cloudflare Worker name
         required: true
         default: kalfetela
+      handshake_id:
+        description: One-time encrypted deployment handshake
+        required: true
 
 permissions:
   contents: read
+  issues: write
 
 concurrency:
   group: deploy-kalfetela
@@ -32,16 +36,57 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Resolve Cloudflare account
+      - name: Securely receive token and deploy
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HANDSHAKE_ID: ${{ inputs.handshake_id }}
+          WORKER_NAME: ${{ inputs.worker_name }}
         run: |
           set -euo pipefail
+
+          # Generate a one-time RSA key inside this runner. Only the public key
+          # leaves the runner; the private key is destroyed with the job.
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out /tmp/deploy-private.pem 2>/dev/null
+          openssl pkey -in /tmp/deploy-private.pem -pubout -out /tmp/deploy-public.pem 2>/dev/null
+          public_key="$(base64 -w0 /tmp/deploy-public.pem)"
+          issue_url="$(gh issue create \
+            --repo "$GH_REPO" \
+            --title "KALFETELA deploy handshake ${HANDSHAKE_ID}" \
+            --body "PUBLIC_KEY_BASE64=${public_key}")"
+          issue_number="${issue_url##*/}"
+
+          cleanup() {
+            rm -f /tmp/deploy-private.pem /tmp/deploy-public.pem /tmp/token.cipher /tmp/token.txt
+            gh issue close "$issue_number" --repo "$GH_REPO" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          echo "Waiting for the encrypted one-time credential exchange..."
+          ciphertext=""
+          for _ in $(seq 1 90); do
+            ciphertext="$(gh api "repos/${GH_REPO}/issues/${issue_number}/comments" \
+              --jq '[.[].body | select(startswith("TOKEN_CIPHERTEXT="))][0] // ""' | sed 's/^TOKEN_CIPHERTEXT=//')"
+            [[ -n "$ciphertext" ]] && break
+            sleep 5
+          done
+          [[ -n "$ciphertext" ]] || { echo "Credential exchange timed out"; exit 1; }
+
+          printf '%s' "$ciphertext" | base64 -d > /tmp/token.cipher
+          openssl pkeyutl -decrypt \
+            -inkey /tmp/deploy-private.pem \
+            -in /tmp/token.cipher \
+            -pkeyopt rsa_padding_mode:oaep \
+            -pkeyopt rsa_oaep_md:sha256 > /tmp/token.txt
+          CLOUDFLARE_API_TOKEN="$(cat /tmp/token.txt)"
+          echo "::add-mask::${CLOUDFLARE_API_TOKEN}"
+          export CLOUDFLARE_API_TOKEN
+
           response="$(curl --fail --silent --show-error \
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
             -H "Content-Type: application/json" \
             https://api.cloudflare.com/client/v4/accounts)"
-          account_id="$(printf '%s' "$response" | node -e '
+          CLOUDFLARE_ACCOUNT_ID="$(printf '%s' "$response" | node -e '
             let data = "";
             process.stdin.on("data", chunk => data += chunk);
             process.stdin.on("end", () => {
@@ -50,11 +95,11 @@ jobs:
               process.stdout.write(json.result[0].id);
             });
           ')"
-          test -n "$account_id"
-          echo "CLOUDFLARE_ACCOUNT_ID=$account_id" >> "$GITHUB_ENV"
+          [[ -n "$CLOUDFLARE_ACCOUNT_ID" ]]
+          export CLOUDFLARE_ACCOUNT_ID
 
-      - name: Deploy Worker and resources
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          PANEL_SECRET: ${{ secrets.PANEL_SECRET }}
-        run: bash deploy.sh "${{ inputs.worker_name }}"
+          PANEL_SECRET="$(openssl rand -hex 32)"
+          echo "::add-mask::${PANEL_SECRET}"
+          export PANEL_SECRET
+
+          bash deploy.sh "$WORKER_NAME"
