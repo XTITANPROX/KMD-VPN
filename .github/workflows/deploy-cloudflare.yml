@@ -1,0 +1,60 @@
+name: Deploy KALFETELA to Cloudflare
+
+on:
+  workflow_dispatch:
+    inputs:
+      worker_name:
+        description: Cloudflare Worker name
+        required: true
+        default: kalfetela
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-kalfetela
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Resolve Cloudflare account
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          response="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            https://api.cloudflare.com/client/v4/accounts)"
+          account_id="$(printf '%s' "$response" | node -e '
+            let data = "";
+            process.stdin.on("data", chunk => data += chunk);
+            process.stdin.on("end", () => {
+              const json = JSON.parse(data);
+              if (!json.success || !json.result?.length) process.exit(1);
+              process.stdout.write(json.result[0].id);
+            });
+          ')"
+          test -n "$account_id"
+          echo "CLOUDFLARE_ACCOUNT_ID=$account_id" >> "$GITHUB_ENV"
+
+      - name: Deploy Worker and resources
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          PANEL_SECRET: ${{ secrets.PANEL_SECRET }}
+        run: bash deploy.sh "${{ inputs.worker_name }}"

@@ -99,7 +99,7 @@ ok "wrangler.toml updated"
 step "Setting PANEL_SECRET"
 if [[ -z "${PANEL_SECRET:-}" ]]; then
   PANEL_SECRET=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
-  echo "  → generated PANEL_SECRET (save this): $PANEL_SECRET"
+  echo "  → generated a new PANEL_SECRET"
 fi
 echo "$PANEL_SECRET" | npx wrangler secret put PANEL_SECRET >/dev/null
 
@@ -115,7 +115,7 @@ npx wrangler deploy
 echo
 echo "🎉 Deployment complete."
 echo "   Panel: https://$WORKER_NAME.<your-subdomain>.workers.dev/panel"
-echo "   Save PANEL_SECRET: $PANEL_SECRET"
+echo "   PANEL_SECRET configured securely."
 if [[ -n "$ZONE_HOST" ]]; then
   echo "   Remember to add a custom domain route for $ZONE_HOST in the Cloudflare dashboard."
 fi
